@@ -1,0 +1,12 @@
+{
+  "calibration_id": "REPLACE_AFTER_3X3_VALIDATION",
+  "camera_serial": "REPLACE_ME",
+  "resolution": [640, 480],
+  "residual_m": null,
+  "base_from_camera": [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ]
+}

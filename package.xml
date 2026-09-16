@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>openarm_pick_place</name>
+  <version>0.1.0</version>
+  <description>D435 perception, MoveIt IK and ros2_control trajectory pipeline for OpenArm and Inspire Hand.</description>
+  <maintainer email="replace@example.com">OpenArm Team</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>custom_ros_messages</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

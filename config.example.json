@@ -1,0 +1,54 @@
+{
+  "camera": {
+    "serial": "REPLACE_ME",
+    "resolution": [640, 480],
+    "depth_scale": 0.001,
+    "hsv_lower": [0, 150, 120],
+    "hsv_upper": [10, 255, 255]
+  },
+  "frames": {
+    "base": "base_link",
+    "camera": "camera_color_optical_frame",
+    "end_effector": "palm"
+  },
+  "workspace": {
+    "minimum": [-0.35, -0.35, 0.02],
+    "maximum": [0.35, 0.35, 0.60]
+  },
+  "ros": {
+    "joint_states": "/joint_states",
+    "arm_action": "/arm_controller/follow_joint_trajectory",
+    "compute_ik": "/compute_ik",
+    "object_pose": "/perception/object_pose",
+    "color_image": "/camera/camera/color/image_raw",
+    "aligned_depth": "/camera/camera/aligned_depth_to_color/image_raw",
+    "camera_info": "/camera/camera/color/camera_info",
+    "hand_command": "/hands/cmd"
+  },
+  "motion": {
+    "move_group": "openarm_right",
+    "joint_names": [
+      "openarm_right_joint1",
+      "openarm_right_joint2",
+      "openarm_right_joint3",
+      "openarm_right_joint4",
+      "openarm_right_joint5",
+      "openarm_right_joint6",
+      "openarm_right_joint7"
+    ],
+    "grasp_offset": [0.0, 0.0, 0.10],
+    "approach_offset": [0.0, 0.0, 0.10],
+    "place_position": [0.25, -0.20, 0.12],
+    "table_height": 0.0,
+    "clearance": 0.02,
+    "max_pose_age": 0.5,
+    "seconds_per_waypoint": 2
+  },
+  "hand": {
+    "model": "RH56DFX",
+    "side": "right",
+    "serial_port": "/dev/ttyUSB0",
+    "open": [1000, 1000, 1000, 1000, 1000, 1000],
+    "grasp": [400, 400, 400, 400, 400, 500]
+  }
+}

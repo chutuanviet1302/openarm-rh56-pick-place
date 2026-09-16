@@ -1,0 +1,3 @@
+numpy>=2.0
+openarm-mujoco==2.2.0
+# ROS 2 packages (rclpy, cv_bridge, MoveIt 2, ros2_control) come from the ROS distribution.

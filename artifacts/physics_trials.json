@@ -1,0 +1,12 @@
+[
+  {
+    "success": false,
+    "failure_reason": "opposed grasp missing: {'thumb': 0.0, 'index': 0.0, 'middle': 0.0, 'ring': 0.0, 'pinky': 0.0}",
+    "final_position": [
+      0.2999931977598589,
+      -0.30001547598835193,
+      0.44989087308108466
+    ],
+    "simulation_seconds": 19.799000000001215
+  }
+]
