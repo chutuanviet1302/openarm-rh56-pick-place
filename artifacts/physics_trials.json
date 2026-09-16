@@ -1,12 +1,59 @@
 [
   {
-    "success": false,
-    "failure_reason": "opposed grasp missing: {'thumb': 0.0, 'index': 0.0, 'middle': 0.0, 'ring': 0.0, 'pinky': 0.0}",
+    "success": true,
+    "failure_reason": null,
     "final_position": [
-      0.2999931977598589,
-      -0.30001547598835193,
-      0.44989087308108466
+      0.28898177047232737,
+      -0.21403635801205106,
+      0.45989106064995194
     ],
-    "simulation_seconds": 19.799000000001215
+    "simulation_seconds": 17.858999999998844,
+    "placement_error_m": 0.01078133695688985,
+    "bottle_tilt_deg": 0.910529610343306,
+    "contact_forces": {
+      "thumb": 0.0,
+      "index": 0.0,
+      "middle": 0.0,
+      "ring": 0.0,
+      "pinky": 0.0
+    }
+  },
+  {
+    "success": true,
+    "failure_reason": null,
+    "final_position": [
+      0.28898177047232737,
+      -0.21403635801205106,
+      0.45989106064995194
+    ],
+    "simulation_seconds": 17.858999999998844,
+    "placement_error_m": 0.01078133695688985,
+    "bottle_tilt_deg": 0.910529610343306,
+    "contact_forces": {
+      "thumb": 0.0,
+      "index": 0.0,
+      "middle": 0.0,
+      "ring": 0.0,
+      "pinky": 0.0
+    }
+  },
+  {
+    "success": true,
+    "failure_reason": null,
+    "final_position": [
+      0.28898177047232737,
+      -0.21403635801205106,
+      0.45989106064995194
+    ],
+    "simulation_seconds": 17.858999999998844,
+    "placement_error_m": 0.01078133695688985,
+    "bottle_tilt_deg": 0.910529610343306,
+    "contact_forces": {
+      "thumb": 0.0,
+      "index": 0.0,
+      "middle": 0.0,
+      "ring": 0.0,
+      "pinky": 0.0
+    }
   }
 ]

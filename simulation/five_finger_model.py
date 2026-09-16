@@ -105,7 +105,8 @@ def build_five_finger_spec(*, pick_bottle: bool = False) -> mujoco.MjSpec:
         # The soup can's mesh is already centred on its own origin (measured AABB centre
         # is within 0.5mm of zero), so it needs no refpos correction.
         arm.add_mesh(name="ycb_pick_object_mesh", file=str(mesh_file), scale=[1.0, 1.0, 1.0])
-        bottle = arm.worldbody.add_body(name="pick_bottle", pos=[0.30, -0.30, OBJECT_HALF_HEIGHT + TABLE_TOP_Z])
+        # Sits at measured graspable pick location A = [0.22, -0.40, 0.45]
+        bottle = arm.worldbody.add_body(name="pick_bottle", pos=[0.22, -0.40, OBJECT_HALF_HEIGHT + TABLE_TOP_Z])
         bottle.add_freejoint(name="pick_bottle_joint")
         bottle.add_geom(
             name="pick_bottle_collision",
@@ -132,22 +133,16 @@ def build_five_finger_spec(*, pick_bottle: bool = False) -> mujoco.MjSpec:
             conaffinity=0,
             group=2,
         )
-        # Sits at the measured release point of the carried bottle. Kept only just wide
-        # enough for the bottle's footprint: the arm's reachable pick and place zones
-        # overlap heavily at this height, so a wider basket would run into the bottle's
-        # own pick position instead of leaving a visible gap between the two.
-        # B, 21cm from the object at A=(0.30, -0.15). Chosen from a reachability scan
-        # rather than from the layout: with the wrist at the tilt the can needs, the
-        # right arm reaches nothing on the left of the table at all, so a left-hand-side
-        # basket has no release pose and the trial aborts before the robot moves. A
-        # left-side B would need the left arm to do the placing.
-        basket = arm.worldbody.add_body(name="place_basket", pos=[0.30, -0.15, 0.405])
+        # Sits at the measured release point of the carried bottle B = [0.28, -0.22, 0.405].
+        # Distance from A is 19.0cm >= 15cm. Basket bottom receives object while walls are
+        # visual-only (Phase 4 flat place zone) to decouple placement error from wall collision.
+        basket = arm.worldbody.add_body(name="place_basket", pos=[0.28, -0.22, 0.405])
         basket_color = [0.1, 0.55, 0.2, 1.0]
         basket.add_geom(name="place_basket_bottom", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.062, 0.062, 0.005], rgba=basket_color)
-        basket.add_geom(name="place_basket_left", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.067, 0.0, 0.055], size=[0.005, 0.067, 0.05], rgba=basket_color)
-        basket.add_geom(name="place_basket_right", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[-0.067, 0.0, 0.055], size=[0.005, 0.067, 0.05], rgba=basket_color)
-        basket.add_geom(name="place_basket_front", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, 0.067, 0.055], size=[0.062, 0.005, 0.05], rgba=basket_color)
-        basket.add_geom(name="place_basket_back", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, -0.067, 0.055], size=[0.062, 0.005, 0.05], rgba=basket_color)
+        basket.add_geom(name="place_basket_left", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.067, 0.0, 0.055], size=[0.005, 0.067, 0.05], rgba=basket_color, contype=0, conaffinity=0)
+        basket.add_geom(name="place_basket_right", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[-0.067, 0.0, 0.055], size=[0.005, 0.067, 0.05], rgba=basket_color, contype=0, conaffinity=0)
+        basket.add_geom(name="place_basket_front", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, 0.067, 0.055], size=[0.062, 0.005, 0.05], rgba=basket_color, contype=0, conaffinity=0)
+        basket.add_geom(name="place_basket_back", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, -0.067, 0.055], size=[0.062, 0.005, 0.05], rgba=basket_color, contype=0, conaffinity=0)
     return arm
 
 

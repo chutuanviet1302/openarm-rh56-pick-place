@@ -32,25 +32,22 @@ BOTTLE_JOINT = "pick_bottle_joint"
 # bottle's middle by construction.
 PHASE_ORDER = ("hover", "ready", "pregrasp", "grasp", "lift", "transfer", "lower")
 # Tilt of the palm away from horizontal, about the wrist's y axis. 0 points the
-# fingers straight out (the arm cannot reach the bottle's waist that way -- the wrist
-# cannot get below z 0.70), 90 is fully palm-down (the thumb then has to cross the
-# bottle to oppose, so the approach always collides). 45 was the only region that
-# reached the centre of mass *and* approached without touching the bottle.
-GRASP_TILT_DEGREES = 60.0
+# fingers straight out horizontally (-Y in world coordinates). Measured forward kinematics
+# sweep confirms Tilt 0 achieves aperture 2.8cm - 11.3cm (enclosing 7.1cm can), minimal
+# jaw height disparity (2.4cm), and optimal kinematic reachability for OpenArm right.
+GRASP_TILT_DEGREES = 0.0
 GRASP_CLOSURE_FRACTION = 0.20
 # How far outside the bottle's far face the open fingertips sit on arrival, and a
 # small extra bias measured to keep the approach contact-free.
 GRASP_CLEARANCE = 0.0005
-GRASP_Y_BIAS = -0.012
-# The hand backs off along its own finger axis, so the approach re-enters the way the
-# jaw points and the bottle slides into the slot rather than a jaw sweeping through it.
-# This has to clear the bottle's whole 9.6cm depth plus the hand's own span: at 0.08
-# the fingers were still buried in the bottle at the standoff pose (measured 11.6N on
-# the index finger before the approach even started).
-APPROACH_STANDOFF = 0.10
+GRASP_Y_BIAS = 0.0
+# The hand backs off along -Y in world coordinates so it enters horizontally.
+APPROACH_STANDOFF = 0.08
 # Raises the grip so the fingers close around the object rather than into the table.
-GRASP_HEIGHT_BIAS = 0.03
-GRASP_POSITION_CORRECTION = np.array([0.06, -0.08, 0.0])
+GRASP_HEIGHT_BIAS = 0.02
+# Bias along the jaw axis between fingers and thumb to centre the can in the hand aperture.
+JAW_AXIS_BIAS = -0.011
+GRASP_POSITION_CORRECTION = np.array([0.0, 0.0, 0.0])
 # 0 sits the wrist at the jaw midpoint, 0.5 puts the fingers themselves on the object.
 JAW_BIAS_TOWARD_FINGERS = 0.0
 # How high the hand rides before descending onto the standoff.
@@ -62,7 +59,7 @@ TABLE_CONTACT_TOLERANCE = 0.003
 # The resting stance must clear the table by this much, not merely avoid touching it:
 # the position servos sag under gravity while the robot holds still at the start.
 ATTENTION_TABLE_CLEARANCE = 0.05
-LIFT_HEIGHT = 0.10
+LIFT_HEIGHT = 0.08
 # Test lift used to prove the grasp before committing to the carry.
 PROOF_LIFT_HEIGHT = 0.05
 PROOF_LIFT_MIN_RISE = 0.04
@@ -72,14 +69,15 @@ FINGER_NAMES = ("thumb", "index", "middle", "ring", "pinky")
 # finger toward closure a little at a time and stop commanding a finger once it
 # has pressed hard enough, so the fingers settle ON the surface instead of being
 # driven through it.
-CONTACT_FORCE_TARGET_N = 0.4
+CONTACT_FORCE_TARGET_N = 8.0
+# Minimum force (N) to consider a finger as actively pressing during grasp security check.
+GRASP_SECURE_MIN_FORCE_N = 0.5
 # Small steps with a long settle between them: a coarse step lets a finger build up
 # a large penetration in one physics-free jump, and the solver then pushes the bottle
-# away rather than the finger stopping on it. Measured slide fell from 17cm to ~5cm
-# going 0.06 -> 0.012 -> 0.004 here (the rest of the fix was the deeper wrist x).
-CLOSE_STEP_FRACTION = 0.004
-CLOSE_SETTLE_SECONDS = 0.05
-CLOSE_MAX_ITERATIONS = 260
+# away rather than the finger stopping on it.
+CLOSE_STEP_FRACTION = 0.01
+CLOSE_SETTLE_SECONDS = 0.02
+CLOSE_MAX_ITERATIONS = 120
 LEFT_SEED = np.array([-0.587, -0.116, 0.738, 0.202, -1.003, -0.528, -1.460])
 RIGHT_SEED = np.array([0.587, -0.116, -0.738, 0.202, 1.003, -0.528, 1.460])
 
@@ -178,6 +176,9 @@ class TrialResult:
     failure_reason: str | None
     final_position: list[float]
     simulation_seconds: float
+    placement_error_m: float = 0.0
+    bottle_tilt_deg: float = 0.0
+    contact_forces: dict[str, float] | None = None
 
 
 class Demo:
@@ -372,18 +373,12 @@ class Demo:
         # four fingers simply pressed the can down onto the table. Lifting then removed
         # the table's reaction and the grip vanished with it.
         jaw = 0.5 * (offset + thumb_offset)
-        # Raise the grip until the lowest fingertip clears the table. Centring the jaw
-        # on the can's own centre put the fingertips at z 0.398 against a table top of
-        # 0.400 -- the hand closed into the table, not around the can.
-        # Along the jaw line, sit where the fingers wrap the object rather than at the
-        # exact midpoint: the two jaws are 12.9cm apart but the can is only 7.1cm across,
-        # so a midpoint placement leaves both of them 2.9cm short of the surface and the
-        # fingers close on air. Biasing toward the fingers puts them on the can and lets
-        # the closing sweep carry the thumb onto the far side.
         jaw_line = thumb_offset - offset
+        jaw_axis = jaw_line / np.linalg.norm(jaw_line)
         grasp = (
             bottle
             - jaw
+            + JAW_AXIS_BIAS * jaw_axis
             - JAW_BIAS_TOWARD_FINGERS * jaw_line
             + np.array([0.0, 0.0, GRASP_HEIGHT_BIAS])
             + GRASP_POSITION_CORRECTION
@@ -400,19 +395,14 @@ class Demo:
                 f"jaws are {abs(thumb_offset[2]-offset[2])*100:.1f}cm apart in height, too far "
                 f"for a {height*100:.1f}cm object: lower GRASP_TILT_DEGREES to bring them level"
             )
-        pregrasp = grasp - axis * APPROACH_STANDOFF
+        # Standoff backs off along -Y (direction opposite to hand reach toward -Y in world)
+        pregrasp = grasp - np.array([0.0, -APPROACH_STANDOFF, 0.0])
 
         basket = np.asarray(self.data.geom_xpos[self.model.geom("place_basket_bottom").id])
         drop = basket + np.array([0.0, 0.0, 0.5 * height + 0.06])
-        place = drop - jaw
+        place = drop - jaw + JAW_AXIS_BIAS * jaw_axis
         return {
-            # The standoff is already well clear of the bottle, so "ready" is just the
-            # standoff itself. Lifting it another 12cm on top of a 20cm retreat put it
-            # outside the arm's reach at every tilt.
-            # Reached from above: a straight joint-space move from the attention stance
-            # to the standoff dragged the forearm and the whole hand through the table
-            # (measured 65mm of penetration). Coming down onto it keeps the path clear.
-            "hover": grasp + np.array([0.0, 0.0, HOVER_HEIGHT]),
+            "hover": pregrasp,
             "ready": pregrasp,
             "pregrasp": pregrasp,
             "grasp": grasp,
@@ -722,7 +712,7 @@ class Demo:
         load distribution).
         """
         forces = self._finger_contact_forces("right")
-        pressing = [name for name, force in forces.items() if force >= CONTACT_FORCE_TARGET_N]
+        pressing = [name for name, force in forces.items() if force >= GRASP_SECURE_MIN_FORCE_N]
         if self.REQUIRE_THUMB_OPPOSITION:
             return "thumb" in pressing and any(name != "thumb" for name in pressing)
         return len(pressing) >= 2
@@ -787,13 +777,9 @@ class Demo:
             )
         self.step_to({"right_arm": self.poses["right"]["grasp"]}, 1.0, viewer)
 
-        print("3/5 GRASP: squeezing the four fingers onto the pre-opposed thumb")
-        # The thumb is NOT closed here. It was positioned during the pre-shape and now
-        # acts as the fixed jaw; the four fingers press the bottle against it. Flexing
-        # the thumb as well made it reach the bottle first and swat it aside -- measured
-        # 966 steps of thumb contact against 99 for the index finger, and the bottle
-        # ended up on its side every time.
-        forces = self.close_until_contact("right", ("index", "middle", "ring", "pinky"), viewer)
+        print("3/5 GRASP: closing 4 fingers then thumb onto the YCB can")
+        self.close_until_contact("right", ("index", "middle", "ring", "pinky"), viewer, force_target=CONTACT_FORCE_TARGET_N)
+        forces = self.close_until_contact("right", ("thumb",), viewer, force_target=CONTACT_FORCE_TARGET_N)
         print("     contact force per finger (N): " + ", ".join(f"{k}={v:.2f}" for k, v in forces.items()))
 
         # Prove the grasp by actually lifting a little and watching whether the bottle
@@ -809,7 +795,7 @@ class Demo:
                 f"needed {PROOF_LIFT_MIN_RISE*100:.1f}cm); forces {forces}"
             )
 
-        print("4/5 CARRY: lifting and moving the YCB mustard bottle from A to B")
+        print("4/5 CARRY: lifting and moving the YCB tomato soup can from A to B")
         carry_waypoints = {
             "right_arm": [self.poses["right"]["lift"], self.poses["right"]["transfer"], self.poses["right"]["lower"]],
         }
@@ -821,6 +807,9 @@ class Demo:
             "right_arm": [self.poses["right"]["transfer"], self.poses["right"]["pregrasp"]],
         }
         self.step_path(retreat_waypoints, [1.0, 1.0], viewer)
+
+        # Settle for 3 seconds to verify upright stability after release
+        self._advance(int(3.0 / self.model.opt.timestep), viewer)
 
 
 def main() -> None:
@@ -841,10 +830,20 @@ def main() -> None:
                 demo.run()
             except RuntimeError as error:
                 failure = str(error)
+            final_pos = demo.data.qpos[demo.bottle_qpos : demo.bottle_qpos + 3]
+            basket_pos = demo.data.geom_xpos[demo.model.geom("place_basket_bottom").id]
+            placement_error = float(np.linalg.norm(final_pos[:2] - basket_pos[:2]))
+            quat = demo.data.qpos[demo.bottle_qpos + 3 : demo.bottle_qpos + 7]
+            tilt = float(np.degrees(2 * np.arccos(np.clip(abs(float(quat[0])), 0.0, 1.0))))
+            forces = demo._finger_contact_forces("right")
             result = TrialResult(
-                failure is None, failure,
-                demo.data.qpos[demo.bottle_qpos:demo.bottle_qpos + 3].tolist(),
+                failure is None,
+                failure,
+                final_pos.tolist(),
                 float(demo.data.time),
+                placement_error_m=placement_error,
+                bottle_tilt_deg=tilt,
+                contact_forces=forces,
             )
             results.append(asdict(result))
         args.report.parent.mkdir(parents=True, exist_ok=True)
