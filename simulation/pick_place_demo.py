@@ -401,9 +401,10 @@ class Demo:
         basket = np.asarray(self.data.geom_xpos[self.model.geom("place_basket_bottom").id])
         drop = basket + np.array([0.0, 0.0, 0.5 * height + 0.06])
         place = drop - jaw + JAW_AXIS_BIAS * jaw_axis
+        hover = pregrasp + np.array([0.0, 0.0, HOVER_HEIGHT])
         return {
-            "hover": pregrasp,
-            "ready": pregrasp,
+            "hover": hover,
+            "ready": hover,
             "pregrasp": pregrasp,
             "grasp": grasp,
             "lift": grasp + np.array([0.0, 0.0, LIFT_HEIGHT]),
@@ -439,8 +440,14 @@ class Demo:
                     self.model, "right", start + (end - start) * (step / steps), SIDE_GRASP_ORIENTATION, seed
                 )
             poses[end_phase] = seed
-        poses["hover"] = poses["pregrasp"]
-        poses["ready"] = poses["pregrasp"]
+
+        seed = poses["pregrasp"]
+        for step in range(1, 7):
+            seed = solve_pose_ik(
+                self.model, "right", centers["pregrasp"] + (centers["hover"] - centers["pregrasp"]) * (step / 6), SIDE_GRASP_ORIENTATION, seed
+            )
+        poses["hover"] = seed
+        poses["ready"] = seed
 
         # The carry waypoints only need to clear the table, so how high they ride is
         # negotiable -- unlike the grasp, which is fixed by where the object is. Ask for
@@ -804,7 +811,7 @@ class Demo:
         print("5/5 RELEASE: opening the right hand into the basket and retreating")
         self.step_to({"right_arm": self.poses["right"]["lower"], "right_hand": self.open_hand["right"]}, 0.8, viewer)
         retreat_waypoints = {
-            "right_arm": [self.poses["right"]["transfer"], self.poses["right"]["pregrasp"]],
+            "right_arm": [self.poses["right"]["transfer"], self.poses["right"]["hover"]],
         }
         self.step_path(retreat_waypoints, [1.0, 1.0], viewer)
 
@@ -816,6 +823,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Scripted OpenArm right-hand five-finger pick-and-place demo")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--trials", type=int, default=1)
+    parser.add_argument(
+        "--camera",
+        type=str,
+        default="isometric",
+        choices=["isometric", "overhead", "front_view", "side_view", "close_grasp", "free"],
+        help="Camera angle: isometric (default), overhead, front_view, side_view, close_grasp, free",
+    )
     parser.add_argument("--report", type=Path, default=Path("artifacts/physics_trials.json"))
     args = parser.parse_args()
     demo = Demo()
@@ -854,8 +868,12 @@ def main() -> None:
             raise SystemExit(1)
         return
     with mujoco.viewer.launch_passive(demo.model, demo.data) as viewer:
-        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
-        viewer.cam.fixedcamid = demo.model.camera("overhead").id
+        if args.camera == "free":
+            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+        else:
+            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+            viewer.cam.fixedcamid = demo.model.camera(args.camera).id
+        print(f"[Camera] Running in '{args.camera}' mode. Press [Tab] to switch camera angles or to Free Camera.")
         try:
             demo.run(viewer)
         except RuntimeError as failure:
@@ -866,6 +884,7 @@ def main() -> None:
         while viewer.is_running():
             mujoco.mj_step(demo.model, demo.data)
             viewer.sync()
+            time.sleep(0.01)
 
 
 if __name__ == "__main__":

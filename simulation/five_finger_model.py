@@ -71,12 +71,48 @@ def _attach_hand(arm: mujoco.MjSpec, side: str) -> None:
     flange.conaffinity = 0
 
 
+def _camera_quat(eye: np.ndarray, target: np.ndarray, up: np.ndarray = np.array([0.0, 0.0, 1.0])) -> list[float]:
+    fwd = target - eye
+    fwd = fwd / np.linalg.norm(fwd)
+    right = np.cross(fwd, up)
+    right = right / np.linalg.norm(right)
+    actual_up = np.cross(right, fwd)
+    rot = np.column_stack([right, actual_up, -fwd])
+    quat = np.zeros(4)
+    mujoco.mju_mat2Quat(quat, rot.flatten())
+    return quat.tolist()
+
+
 def build_five_finger_spec(*, pick_bottle: bool = False) -> mujoco.MjSpec:
     if not INSPIRE_ROOT.is_dir():
         raise FileNotFoundError("Inspire RH56DFX assets missing; clone correlllab/rh56_controller with h1_mujoco")
 
     arm = mujoco.MjSpec.from_file(str(official_model_path()))
     arm.worldbody.add_camera(name="overhead", pos=[0.15, 0.0, 2.2], quat=[1, 0, 0, 0], fovy=50)
+    arm.worldbody.add_camera(
+        name="isometric",
+        pos=[0.95, -0.85, 0.95],
+        quat=_camera_quat(np.array([0.95, -0.85, 0.95]), np.array([0.25, -0.30, 0.45])),
+        fovy=48,
+    )
+    arm.worldbody.add_camera(
+        name="front_view",
+        pos=[1.10, -0.22, 0.70],
+        quat=_camera_quat(np.array([1.10, -0.22, 0.70]), np.array([0.25, -0.25, 0.45])),
+        fovy=48,
+    )
+    arm.worldbody.add_camera(
+        name="side_view",
+        pos=[0.25, -1.15, 0.70],
+        quat=_camera_quat(np.array([0.25, -1.15, 0.70]), np.array([0.25, -0.30, 0.45])),
+        fovy=48,
+    )
+    arm.worldbody.add_camera(
+        name="close_grasp",
+        pos=[0.55, -0.58, 0.62],
+        quat=_camera_quat(np.array([0.55, -0.58, 0.62]), np.array([0.22, -0.35, 0.45])),
+        fovy=38,
+    )
     table = arm.geom("table_top")
     # The table used to span x -0.20..0.90, i.e. it ran underneath the robot, which
     # stands at x=0. Arms resting at the sides were then over the table top, so once the
