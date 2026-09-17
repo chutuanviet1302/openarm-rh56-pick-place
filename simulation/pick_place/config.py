@@ -125,7 +125,7 @@ BASKET_CONTACT_TOLERANCE = 0.003  # same graze allowance as the table
 # Sampling boxes (table-plane x, y) covering the region the straight-wrist grasp reaches.
 # Every sample is still verified by IK before physics runs (demo.sample_layout).
 RANDOM_PICK_BOX = ((0.36, 0.44), (-0.32, -0.22))
-RANDOM_BASKET_BOX = ((0.34, 0.46), (-0.08, 0.04))
+RANDOM_BASKET_BOX = ((0.34, 0.46), (-0.03, 0.05))
 MIN_PICK_TO_BASKET_M = 0.15
 # The wrapped hand reaches ~8cm beyond the can's surface, so the basket's nearest wall
 # must stay this far from the object's centre or the thumb clips it at grasp.

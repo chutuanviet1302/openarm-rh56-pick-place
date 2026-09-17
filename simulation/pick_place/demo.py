@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from simulation.five_finger_model import BASKET_POSITION_B, PICK_POSITION_A
+from simulation.five_finger_model import BASKET_HALF_WIDTH, BASKET_POSITION_B, BASKET_WALL_THICKNESS, PICK_POSITION_A
 from simulation.pick_place import config as C
 from simulation.pick_place.episode import EpisodeLog, TrialResult
 from simulation.pick_place.executor import Executor
@@ -294,7 +294,7 @@ class Demo:
 
 
 # ---------------------------------------------------------------------- trials / layouts
-def object_to_basket_distance(pick, basket, half_width: float = 0.085) -> float:
+def object_to_basket_distance(pick, basket, half_width: float = BASKET_HALF_WIDTH + BASKET_WALL_THICKNESS) -> float:
     """Table-plane distance from the object's centre to the basket's nearest outer wall."""
     dx = max(abs(pick[0] - basket[0]) - half_width, 0.0)
     dy = max(abs(pick[1] - basket[1]) - half_width, 0.0)

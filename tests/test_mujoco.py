@@ -68,6 +68,49 @@ class MujocoSmokeTests(unittest.TestCase):
         mirrored = offsets["right"][:2] * np.array([1.0, -1.0])
         np.testing.assert_allclose(offsets["left"][:2], mirrored, atol=0.02)
 
+    def test_palm_collides_and_does_not_touch_the_arm(self):
+        """Every hand geom takes part in collision (the hand must not be able to pass
+        through the basket or table), and with the hand mounted along the flange axis
+        the palm shell no longer intersects the arm in the rest or attention poses."""
+        demo = Demo()
+        model, data = demo.model, demo.data
+        for side in ("left", "right"):
+            base = model.body(f"inspire_{side}_base").id
+            # The vendor model carries one visual-only shell (group 2) and eight
+            # collision primitives (group 3) on the palm; the latter must all collide.
+            palm_collision = [g for g in range(model.ngeom) if model.geom_bodyid[g] == base and model.geom_group[g] != 2]
+            self.assertGreaterEqual(len(palm_collision), 4)
+            self.assertTrue(all(model.geom_contype[g] != 0 for g in palm_collision), f"{side} palm collision disabled")
+        for pose in ("attention", "zero"):
+            if pose == "zero":
+                data.qpos[:] = 0.0
+            mujoco.mj_forward(model, data)
+            for contact in data.contact[: data.ncon]:
+                b1 = model.body(model.geom_bodyid[contact.geom1]).name or ""
+                b2 = model.body(model.geom_bodyid[contact.geom2]).name or ""
+                hand_vs_arm = ("inspire" in b1) != ("inspire" in b2) and ("openarm" in b1 or "openarm" in b2)
+                self.assertFalse(hand_vs_arm and contact.dist < 0, f"{pose}: {b1} intersects {b2}")
+
+    def test_arms_hanging_straight_down_do_not_touch_the_table(self):
+        """Standing at attention with every arm joint at zero, both arms hang beside
+        the pedestal tongue and nothing of the robot touches the table."""
+        model = build_five_finger_model(pick_bottle=True)
+        data = mujoco.MjData(model)
+        for side in ("left", "right"):
+            for name in (f"openarm_{side}_joint{i}" for i in range(1, 8)):
+                data.qpos[model.joint(name).qposadr[0]] = 0.0
+        mujoco.mj_forward(model, data)
+        table_geoms = {model.geom("table_top").id, model.geom("table_pedestal_mount").id}
+        offenders = set()
+        for contact in data.contact[: data.ncon]:
+            if contact.dist >= 0 or not ({contact.geom1, contact.geom2} & table_geoms):
+                continue
+            other = contact.geom2 if contact.geom1 in table_geoms else contact.geom1
+            body = model.body(model.geom_bodyid[other]).name or ""
+            if "openarm" in body or "inspire" in body:
+                offenders.add(body)
+        self.assertFalse(offenders, f"robot touches the table with arms straight down: {sorted(offenders)}")
+
     def test_hands_continue_the_forearm_axis(self):
         """The Inspire hand is bolted to the flange along the tool axis: its fingers
         point the way the forearm points (within a few degrees), the base sits just
@@ -121,9 +164,16 @@ class MujocoSmokeTests(unittest.TestCase):
 
     def test_robot_pedestal_and_bottle_are_on_table(self):
         model = build_five_finger_model(pick_bottle=True)
+        # The pedestal's base block (x -0.155..0.095) stands on the rear tongue of the
+        # table, and the work surface starts in front of the hanging arms.
+        tongue = model.geom("table_pedestal_mount")
+        tongue_center = model.body(tongue.bodyid[0]).pos + tongue.pos
+        self.assertLessEqual(tongue_center[0] - tongue.size[0], -0.155)
+        self.assertGreaterEqual(tongue_center[0] + tongue.size[0], 0.095)
+        self.assertAlmostEqual(float(tongue_center[2] + tongue.size[2]), 0.40, places=3)
         table = model.geom("table_top")
         table_center = model.body(table.bodyid[0]).pos + table.pos
-        self.assertLessEqual(table_center[0] - table.size[0], 0.0)
+        self.assertGreaterEqual(table_center[0] - table.size[0], 0.12)
         self.assertGreater(model.body("openarm_left_base_link").pos[2], 0.40)
         self.assertEqual(model.joint("pick_bottle_joint").type[0], mujoco.mjtJoint.mjJNT_FREE)
         self.assertEqual(model.geom("ycb_mustard_bottle_visual").type[0], mujoco.mjtGeom.mjGEOM_MESH)

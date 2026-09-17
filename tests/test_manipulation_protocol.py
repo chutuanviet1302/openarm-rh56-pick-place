@@ -67,7 +67,10 @@ class PerceptionTests(unittest.TestCase):
 
 class RandomizationTests(unittest.TestCase):
     def test_object_to_basket_distance_measures_to_the_wall(self):
-        self.assertAlmostEqual(object_to_basket_distance((0.3, -0.4), (0.3, -0.2)), 0.2 - 0.085)
+        from simulation.five_finger_model import BASKET_HALF_WIDTH, BASKET_WALL_THICKNESS
+
+        outer = BASKET_HALF_WIDTH + BASKET_WALL_THICKNESS
+        self.assertAlmostEqual(object_to_basket_distance((0.3, -0.4), (0.3, -0.2)), 0.2 - outer)
         self.assertEqual(object_to_basket_distance((0.3, -0.2), (0.3, -0.2)), 0.0)
 
     def test_sampled_layout_is_executable_and_inside_the_boxes(self):

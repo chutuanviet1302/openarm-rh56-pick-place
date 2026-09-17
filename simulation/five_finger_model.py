@@ -31,6 +31,14 @@ HAND_PREFIX = "inspire_"
 PICK_POSITION_A = (0.396, -0.275)
 BASKET_POSITION_B = (0.40, -0.02)
 BASKET_FLOOR_Z = 0.405
+# Basket inner half-width and wall height. Sized for the hand, not the can: with a
+# horizontal side grasp the palm's underside is only 3cm above the can's bottom at
+# 8cm behind the can and ~7-10cm at 12cm behind it (measured hand profile), so a wall
+# 5cm tall must be at least 12cm from the can's centre for the can to reach the floor
+# without the palm resting on the rim. A 16cm basket left the palm sitting on the wall.
+BASKET_HALF_WIDTH = 0.12
+BASKET_WALL_HEIGHT = 0.05
+BASKET_WALL_THICKNESS = 0.01
 # How far the pedestal and both shoulders sit above the stock model's origin. This
 # sets how far the arms have to reach *down* to work on the table, so it decides
 # whether the object sits in the middle of the workspace or at its lower edge.
@@ -40,6 +48,15 @@ BASKET_FLOOR_Z = 0.405
 # wrist at 0.635 -- so no grasp of it was reachable at all, at any tilt or position.
 # At 0.30 every candidate object position on the right-hand side of the table solves.
 PEDESTAL_RAISE = 0.10
+# The stock pedestal is a floor-standing unit: a 20cm-tall base block, a bare square
+# column and the torso housing the shoulders bolt to. Here the robot stands ON the
+# table, so the base block is moved up onto the table top and the column shortened by
+# the same amount, leaving the torso (and therefore the arms' reach) exactly where it
+# was. Done on the mesh itself (vertices below PEDESTAL_CUT_Z shifted up by
+# PEDESTAL_BASE_LIFT); the column has no intermediate vertices, so it simply shortens.
+PEDESTAL_CUT_Z = 0.35          # world z separating the base block from the column
+PEDESTAL_BASE_LIFT = 0.30      # foot 0.10 -> 0.40 = TABLE_TOP_Z
+PEDESTAL_ASSET_DIR = Path(__file__).resolve().parent.parent / "assets" / "openarm"
 # Flange -> Inspire hand base transform, derived from the two frames rather than tuned:
 #
 #   OpenArm v2 ee_base_link: the tool axis is -z (the chain runs 0 0 -L, the stock
@@ -65,18 +82,55 @@ MOUNTS = {
 }
 
 
+def _read_binary_stl(path: Path) -> np.ndarray:
+    raw = path.read_bytes()
+    count = int.from_bytes(raw[80:84], "little")
+    if len(raw) != 84 + 50 * count:
+        raise ValueError(f"{path} is not a binary STL")
+    records = np.frombuffer(raw[84:], dtype=np.dtype([("n", "<3f4"), ("v", "<9f4"), ("attr", "<u2")]))
+    return records["v"].reshape(-1, 3, 3).astype(np.float32).copy()
+
+
+def _write_binary_stl(path: Path, triangles: np.ndarray) -> None:
+    records = np.zeros(len(triangles), dtype=np.dtype([("n", "<3f4"), ("v", "<9f4"), ("attr", "<u2")]))
+    a, b, c = triangles[:, 0], triangles[:, 1], triangles[:, 2]
+    normals = np.cross(b - a, c - a)
+    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-12)
+    records["n"] = normals
+    records["v"] = triangles.reshape(-1, 9)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(80) + len(triangles).to_bytes(4, "little") + records.tobytes())
+
+
+def _pedestal_on_table(arm: mujoco.MjSpec) -> None:
+    """Rewrite the pedestal meshes so the base block sits on the table top.
+
+    The STL is in millimetres with the foot at z=0 (world z = 0.001*z + geom z). The
+    generated files are cached in assets/openarm and regenerated when missing.
+    """
+    for mesh_name, geom_name in (("body_link0", "openarm_body_link0_visual"), ("body_link0_symp", "openarm_body_link0_collision")):
+        mesh = arm.mesh(mesh_name)
+        source = Path(arm.modelfiledir) / arm.meshdir / mesh.file if not Path(mesh.file).is_absolute() else Path(mesh.file)
+        target = PEDESTAL_ASSET_DIR / f"{mesh_name}_on_table.stl"
+        if not target.is_file() or target.stat().st_mtime < source.stat().st_mtime:
+            triangles = _read_binary_stl(source)
+            geom_z = float(np.asarray(arm.geom(geom_name).pos)[2])
+            world_z = triangles[:, :, 2] * 0.001 + geom_z
+            triangles[:, :, 2] += np.where(world_z < PEDESTAL_CUT_Z, PEDESTAL_BASE_LIFT * 1000.0, 0.0).astype(np.float32)
+            _write_binary_stl(target, triangles)
+        mesh.file = str(target)
+
+
 def _attach_hand(arm: mujoco.MjSpec, side: str) -> None:
     scene = INSPIRE_ROOT / f"inspire_{side}.xml"
     if not scene.is_file():
         raise FileNotFoundError(f"Inspire RH56DFX asset missing: {scene}")
     hand = mujoco.MjSpec.from_file(str(scene))
     root = hand.body("base")
-    # The supplied palm collision shell intersects OpenArm link 5 after mounting.
-    # Palm contact is not used as grasp evidence, so keep the visible palm and let
-    # only the articulated digits participate in collision.
-    for geom in root.geoms:
-        geom.contype = 0
-        geom.conaffinity = 0
+    # Palm collision stays ON: the hand must not be able to pass through the basket or
+    # the table. (It used to be disabled because the palm shell intersected link5 with
+    # the old sideways mount; with the hand along the flange axis it no longer does --
+    # checked by tests/test_mujoco.py::test_palm_collides_and_does_not_touch_the_arm.)
     root.pos = np.zeros(3)
     root.quat = np.array([1.0, 0.0, 0.0, 0.0])
     position, quaternion = MOUNTS[side]
@@ -179,19 +233,24 @@ def build_five_finger_spec(
     # run aborted on a table contact before it started. Moved forward to x 0.10..0.80 so
     # the robot stands behind its workbench, the way it would in reality; the object at
     # x=0.30 and the basket at x=0.36 both still sit well inside it.
-    table.size = np.array([0.35, 0.55, 0.04])
-    table.pos = np.array([-0.12, 0.0, 0.0])
+    # T-shaped table: the work surface starts in front of the hanging arms (they occupy
+    # x -0.04..0.12, |y| 0.105..0.19 when the robot stands at attention with the arms
+    # straight down), and a narrow tongue behind it carries the pedestal base. So the
+    # arms can hang freely beside the tongue without touching wood.
+    table.size = np.array([0.285, 0.55, 0.04])   # x 0.13 .. 0.70
+    table.pos = np.array([-0.055, 0.0, 0.0])
     # Pedestal mounting base on table: extends under the robot base so the robot is mounted on the table
     arm.body("table").add_geom(
         name="table_pedestal_mount",
         type=mujoco.mjtGeom.mjGEOM_BOX,
-        pos=[-0.47, 0.0, 0.0],
-        size=[0.12, 0.10, 0.04],
+        pos=[-0.52, 0.0, 0.0],
+        size=[0.15, 0.10, 0.04],   # x -0.20 .. 0.10, |y| <= 0.10: just the base block's footprint
         rgba=[0.82, 0.71, 0.55, 1.0],
     )
     for name in ("openarm_body_link0_visual", "openarm_body_link0_collision"):
         pedestal = arm.geom(name)
         pedestal.pos = np.asarray(pedestal.pos) + [0.0, 0.0, PEDESTAL_RAISE]
+    _pedestal_on_table(arm)
     for side in MOUNTS:
         base = arm.body(f"openarm_{side}_base_link")
         base.pos = np.asarray(base.pos) + [0.0, 0.0, PEDESTAL_RAISE]
@@ -300,14 +359,14 @@ def build_five_finger_spec(
             name="place_basket", pos=[float(basket_position[0]), float(basket_position[1]), BASKET_FLOOR_Z]
         )
         basket_color = [0.1, 0.55, 0.2, 1.0]
-        bw = 0.08
-        wh = 0.0225
-        wz = 0.0275
+        bw = BASKET_HALF_WIDTH
+        wh = 0.5 * (BASKET_WALL_HEIGHT - 0.005)
+        wz = 0.005 + wh
         basket.add_geom(name="place_basket_bottom", type=mujoco.mjtGeom.mjGEOM_BOX, size=[bw, bw, 0.005], rgba=basket_color)
-        basket.add_geom(name="place_basket_left", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[bw + 0.005, 0.0, wz], size=[0.005, bw + 0.005, wh], rgba=basket_color)
-        basket.add_geom(name="place_basket_right", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[-(bw + 0.005), 0.0, wz], size=[0.005, bw + 0.005, wh], rgba=basket_color)
-        basket.add_geom(name="place_basket_front", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, bw + 0.005, wz], size=[bw, 0.005, wh], rgba=basket_color)
-        basket.add_geom(name="place_basket_back", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, -(bw + 0.005), wz], size=[bw, 0.005, wh], rgba=basket_color)
+        basket.add_geom(name="place_basket_left", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[bw + 0.5 * BASKET_WALL_THICKNESS, 0.0, wz], size=[0.5 * BASKET_WALL_THICKNESS, bw + 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
+        basket.add_geom(name="place_basket_right", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[-(bw + 0.5 * BASKET_WALL_THICKNESS), 0.0, wz], size=[0.5 * BASKET_WALL_THICKNESS, bw + 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
+        basket.add_geom(name="place_basket_front", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, bw + 0.5 * BASKET_WALL_THICKNESS, wz], size=[bw, 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
+        basket.add_geom(name="place_basket_back", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, -(bw + 0.5 * BASKET_WALL_THICKNESS), wz], size=[bw, 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
     return arm
 
 

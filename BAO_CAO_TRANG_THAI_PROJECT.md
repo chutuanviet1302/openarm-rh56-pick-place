@@ -11,13 +11,13 @@ Thay thế `BAO_CAO_LOI_PROJECT.md` (16/09) — mọi mục P0/P1 trong đó đ�
 |---|---:|---|
 | Trial pick-and-place vật lý, bố cục mặc định | **3/3 đạt** | `artifacts/physics_trials.json` |
 | Trial với perception (vị trí vật từ camera D435, không đọc sim) | **3/3 đạt**, sai số perception 3.0 mm | `--perception` |
-| Trial bố cục ngẫu nhiên + perception (seed 5) | **6/6 đạt**, sai số đặt 13–19 mm | `artifacts/randomized_trials.json` |
-| Unit/integration test | **36/36 đạt** | `python -m unittest discover -s tests` |
+| Trial bố cục ngẫu nhiên + perception (seed 5) | **6/6 đạt**, sai số đặt 10–14 mm | `artifacts/randomized_trials.json` |
+| Unit/integration test | **38/38 đạt** | `python -m unittest discover -s tests` |
 | Cổ tay thẳng tại grasp | joint6 = +4.9°, joint7 = 0.0° (bố cục mặc định) | log `wrist bend at grasp` |
 | 5 ngón chạm trước khi nhấc | thumb 28.7 / index 9.8 / middle 9.0 / ring 7.7 / pinky 3.4 N | `grasp_forces` |
 | Proof-lift | tay +4.2 cm, vật +4.2 cm, trượt 0 mm, nghiêng 3° | `proof_lift_*` |
 | Đáy vật trên mép rổ khi mang | +5.7 cm (yêu cầu ≥ 5 cm) | `carry_clearance_above_rim_m` |
-| Đặt vào rổ | sai số 15 mm, nghiêng 0.0° | `placement_error_m`, `bottle_tilt_deg` |
+| Đặt vào rổ | sai số 12 mm, nghiêng 0.0° | `placement_error_m`, `bottle_tilt_deg` |
 | Tốc độ viewer | thời gian thực (60 Hz redraw) | `_render()` |
 
 ## 2. Những gì đã sửa trong đợt này
@@ -27,6 +27,11 @@ Thay thế `BAO_CAO_LOI_PROJECT.md` (16/09) — mọi mục P0/P1 trong đó đ�
 - Sửa: transform suy ra từ hai hệ trục (trục dụng cụ OpenArm v2 = −z của `ee_base_link`; Inspire +z = ngón, +x = lòng bàn tay) → quay 180° quanh (1,1,0)/√2 (phải) và (1,−1,0)/√2 (trái), đế tay đặt sau vỏ link6 với adapter 1 cm. Ngón tay lệch trục cẳng tay 2.0° (phải) / 2.9° (trái); lòng bàn tay hướng vào thân, ngón cái phía trước.
 - Suy lại toàn bộ phía sau: `NATURAL_GRASP_JOINTS` (j6 = 1.8°, j7 = −0.6°, tay vươn trước, ngón nghiêng xuống 22°), tư thế chờ (nắm tay trước thân, khuỷu 108°), A = (0.396, −0.275), B = (0.40, −0.02), hộp randomization; IK nullspace kéo cả j6 và j7 về 0.
 - Đặt vật: sau khi nắm, đo vị trí thật của vật so với cổ tay và **lập lại kế hoạch đặt** từ offset đo được (`plan_place(held_offset)`); hạ 2 cm trên đáy rổ. Sai số đặt 10–16 mm.
+
+### Đế robot và rổ
+- Tư thế nghiêm (mọi khớp = 0) không chạm bàn: bàn hình chữ T — mặt làm việc x 0.13…0.70, lưỡi sau |y| ≤ 0.10 chỉ đỡ khối đế; hai tay buông thẳng nằm hai bên lưỡi, 0 tiếp xúc (test `test_arms_hanging_straight_down_do_not_touch_the_table`).
+- Đế robot đặt trên mặt bàn: khối đế của pedestal (cao 20 cm) được dịch lên mặt bàn bằng cách viết lại STL (`assets/openarm/*_on_table.stl`), cột ngắn lại 30 cm, thân/vai giữ nguyên độ cao nên tầm với không đổi.
+- Bàn tay **không được xuyên rổ**: bật lại collision của lòng bàn tay (trước bị tắt vì mount cũ làm vỏ lòng bàn tay cắt link5; mount mới không còn — test `test_palm_collides_and_does_not_touch_the_arm`). Đo profile mặt dưới bàn tay khi nắm: chỉ cao hơn đáy lon 3 cm ở 8 cm sau lon, 7–10 cm ở 12 cm sau lon → rổ 16 cm làm lòng bàn tay tì lên thành; rổ đổi thành 24 cm (thành 5 cm). Độ xuyên sâu nhất tay–rổ trong cả chu trình: 0.3 mm (ngưỡng abort 3 mm).
 
 ### Grasp và quỹ đạo
 - Lon vẽ chìm 5 cm trong bàn: visual mesh bị dịch `-OBJECT_HALF_HEIGHT` dù mesh đã căn tâm. Đáy mesh giờ trùng đáy collision trên mặt bàn.
@@ -57,6 +62,7 @@ Thay thế `BAO_CAO_LOI_PROJECT.md` (16/09) — mọi mục P0/P1 trong đó đ�
 | Mức | Việc | Ghi chú |
 |---|---|---|
 | P1 | Độ dày adapter flange→đế tay (1 cm) là giả định | Thay bằng CAD adapter thật trước sim-to-real |
+| P2 | Rổ 24 cm là kích thước tối thiểu cho side-grasp ngang; rổ nhỏ/thành cao hơn cần grasp từ trên xuống hoặc đặt lon lệch tâm | Quyết định theo rổ thật của lab |
 | P1 | Vùng với của tư thế cổ-tay-thẳng hẹp (A: x 0.36–0.44, y −0.32…−0.22) | Nếu cần A rộng hơn: thêm tư thế tham chiếu thứ hai hoặc dùng tay trái cho nửa bàn bên trái |
 | P2 | Tay trái chỉ giữ tư thế chờ | Demo hai tay như video tham chiếu chưa làm |
 | P2 | Camera `overhead` không phát hiện được lon (mặt trên lon màu bạc, không đỏ) | Dùng `d435_head`; hoặc thêm segment theo depth-plane thay vì màu |
