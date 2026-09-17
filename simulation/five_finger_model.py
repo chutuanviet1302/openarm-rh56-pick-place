@@ -163,6 +163,7 @@ def build_five_finger_spec(*, pick_bottle: bool = False) -> mujoco.MjSpec:
             name="ycb_mustard_bottle_visual",
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="ycb_pick_object_mesh",
+            pos=[0.0, 0.0, -OBJECT_HALF_HEIGHT],
             mass=0.0,
             rgba=[0.80, 0.16, 0.12, 1.0],
             contype=0,
@@ -170,8 +171,7 @@ def build_five_finger_spec(*, pick_bottle: bool = False) -> mujoco.MjSpec:
             group=2,
         )
         # Sits at the measured release point of the carried bottle B = [0.28, -0.22, 0.405].
-        # Distance from A is 19.0cm >= 15cm. Basket bottom receives object while walls are
-        # visual-only (Phase 4 flat place zone) to decouple placement error from wall collision.
+        # Distance from A is 19.0cm >= 15cm.
         basket = arm.worldbody.add_body(name="place_basket", pos=[0.28, -0.22, 0.405])
         basket_color = [0.1, 0.55, 0.2, 1.0]
         basket.add_geom(name="place_basket_bottom", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.062, 0.062, 0.005], rgba=basket_color)

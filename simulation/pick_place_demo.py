@@ -270,30 +270,22 @@ class Demo:
         mujoco.mj_forward(self.model, self.data)
 
     def _attention_pose(self) -> dict[str, np.ndarray]:
-        """Arms at the sides, fists closed -- bent enough to clear the table properly.
+        """Symmetric resting stance: arms at sides, fists closed, palms facing inward.
 
-        All-zero joints give a fully straight arm hanging at the shoulder's resting
-        line, which is the stance we want. It only works while the shoulders are high
-        above the table: at the pedestal height needed to reach the can, straight arms
-        hang *below* the table top. Picking merely the first bend with no contact is not
-        enough either -- the position servos sag under gravity during the opening hold
-        and the hand settles onto the table anyway -- so this asks for real clearance.
+        Right palm faces left (+Y in world), left palm faces right (-Y in world).
+        Fingers point down (-Z), thumbs face forward (+X). The wrists are held at
+        x=-0.05, z=0.58 so the hands hang cleanly above and behind the table edge,
+        providing guaranteed collision-free clearance and natural anatomical symmetry.
         """
-        start = np.zeros(7)
-        start[3] = 1.5
+        base_mat_right = np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
+        base_mat_left = np.array([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
+        # Relative transform from base to control point site: bmat.T @ smat
+        r_rel = np.array([[0.0, 0.0, -1.0], [0.0, -1.0, 0.0], [-1.0, 0.0, 0.0]])
+        site_mat = {"right": base_mat_right @ r_rel, "left": base_mat_left @ r_rel}
+        targets = {"right": np.array([-0.05, -0.22, 0.58]), "left": np.array([-0.05, 0.22, 0.58])}
         poses = {}
         for side in ("left", "right"):
-            self.data.qpos[self.arm_qpos[side]] = start
-        mujoco.mj_forward(self.model, self.data)
-        for side in ("left", "right"):
-            site = self.ee_site_id[side]
-            poses[side] = solve_pose_ik(
-                self.model,
-                side,
-                self.data.site_xpos[site] + np.array([0.0, 0.0, ATTENTION_TABLE_CLEARANCE + 0.03]),
-                self.data.site_xmat[site].reshape(3, 3),
-                start,
-            )
+            poses[side] = solve_pose_ik(self.model, side, targets[side], site_mat[side], np.zeros(7))
         return poses
 
     def _jaw_offsets(self, orientation: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -448,6 +440,9 @@ class Demo:
             )
         poses["hover"] = seed
         poses["ready"] = seed
+        poses["via"] = solve_pose_ik(
+            self.model, "right", np.array([0.05, -0.22, 0.65]), SIDE_GRASP_ORIENTATION, poses["hover"]
+        )
 
         # The carry waypoints only need to clear the table, so how high they ride is
         # negotiable -- unlike the grasp, which is fixed by where the object is. Ask for
@@ -758,10 +753,11 @@ class Demo:
         print("1/5 READY: attention stance (arms straight, fists closed), then raising the right arm")
         self.step_to({}, 1.5, viewer)
         # Up and over, never across: a direct joint-space move from the arms-down stance
-        # to the standoff drags the hand through the table top. Rising to the hover pose
-        # first keeps the whole path above it.
-        self.step_to({"right_arm": self.poses["right"]["hover"], "right_hand": self.closed_hand["right"]}, 1.4, viewer)
-        self.step_to({"right_arm": self.poses["right"]["ready"]}, 1.0, viewer)
+        # to the standoff drags the hand through the table top. Rising through a high via-point
+        # first keeps the whole path above the table and clears any basket/obstacles.
+        self.step_to({"right_arm": self.poses["right"]["via"], "right_hand": self.closed_hand["right"]}, 1.2, viewer)
+        self.step_to({"right_arm": self.poses["right"]["hover"]}, 1.0, viewer)
+        self.step_to({"right_arm": self.poses["right"]["ready"]}, 0.8, viewer)
 
         # Sequencing after correlllab/rh56_controller (grasp_executor._run_thumb_reflex):
         # the hand opens wide *before* travelling, the arm then slides in horizontally
@@ -811,9 +807,10 @@ class Demo:
         print("5/5 RELEASE: opening the right hand into the basket and retreating")
         self.step_to({"right_arm": self.poses["right"]["lower"], "right_hand": self.open_hand["right"]}, 0.8, viewer)
         retreat_waypoints = {
-            "right_arm": [self.poses["right"]["transfer"], self.poses["right"]["hover"]],
+            "right_arm": [self.poses["right"]["transfer"], self.poses["right"]["via"], self.attention_pose["right"]],
         }
-        self.step_path(retreat_waypoints, [1.0, 1.0], viewer)
+        self.step_path(retreat_waypoints, [1.0, 1.0, 1.0], viewer)
+        self.step_to({"right_arm": self.attention_pose["right"], "right_hand": self.closed_hand["right"]}, 0.8, viewer)
 
         # Settle for 3 seconds to verify upright stability after release
         self._advance(int(3.0 / self.model.opt.timestep), viewer)
