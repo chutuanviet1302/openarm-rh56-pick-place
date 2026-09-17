@@ -1,0 +1,3 @@
+[submodule "assets/rh56_controller"]
+	path = assets/rh56_controller
+	url = https://github.com/correlllab/rh56_controller.git
