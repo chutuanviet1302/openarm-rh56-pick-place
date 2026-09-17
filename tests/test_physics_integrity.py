@@ -3,7 +3,7 @@ import inspect
 import unittest
 
 from simulation.five_finger_model import build_five_finger_model
-from simulation.pick_place_demo import Demo
+from simulation.pick_place_demo import Demo, Executor
 
 
 class PhysicsIntegrityTests(unittest.TestCase):
@@ -25,11 +25,17 @@ class PhysicsIntegrityTests(unittest.TestCase):
         self.assertAlmostEqual(float(model.body_mass[model.body("pick_bottle").id]), 0.2)
 
     def test_runtime_does_not_overwrite_physics_state(self):
-        tree = ast.parse(inspect.getsource(Demo))
-        runtime = {"step_path", "_advance", "_proof_lift", "run"}
-        for method in tree.body[0].body:
-            if not isinstance(method, ast.FunctionDef) or method.name not in runtime:
-                continue
+        # Everything that steps time lives in Executor; Demo.run only sequences phases.
+        # None of it may write the robot's or the object's qpos/qvel directly.
+        for cls in (Executor, Demo):
+            tree = ast.parse(inspect.getsource(cls))
+            for method in tree.body[0].body:
+                if not isinstance(method, ast.FunctionDef):
+                    continue
+                self._assert_no_state_writes(method)
+
+    def _assert_no_state_writes(self, method):
+        if True:
             for node in ast.walk(method):
                 if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
                     targets = node.targets if isinstance(node, ast.Assign) else [node.target]

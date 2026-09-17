@@ -1,0 +1,7 @@
+# Generated for MuJoCo YCB tomato soup can texture mapping
+newmtl tomato_soup_can
+Ka 0.1 0.1 0.1
+Kd 1.0 1.0 1.0
+Ks 0.3 0.3 0.3
+Ns 50.0
+map_Kd ../textures/tomato_soup_can.png

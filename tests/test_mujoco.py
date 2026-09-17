@@ -68,15 +68,25 @@ class MujocoSmokeTests(unittest.TestCase):
             self.assertLess(np.linalg.norm(wrist - hand), 0.005)
 
     def test_both_hands_point_down_in_attention_pose(self):
-        # Demo() now starts in an attention stance (arms straight at the sides,
-        # fists closed) rather than the old bent, forward-reaching default.
+        # Demo() starts in a symmetric table-top stance: both hands over the table,
+        # fists closed, ~7cm above table, palms facing robot body.
         demo = Demo()
         for side in ("left", "right"):
-            wrist = demo.data.xpos[demo.model.body(f"inspire_{side}_base").id]
-            tips = [demo.data.site_xpos[demo.model.site(f"inspire_{side}_{side}_{finger}_tip").id] for finger in ("index", "middle", "ring", "pinky")]
-            direction = np.mean(tips, axis=0) - wrist
-            self.assertLess(direction[2], -abs(direction[0]))
-            self.assertLess(direction[2], -abs(direction[1]))
+            base = demo.data.xpos[demo.model.body(f"inspire_{side}_base").id]
+            # Both hands are positioned over the table (x > 0.15m)
+            self.assertGreater(base[0], 0.15)
+            # Palm normal faces towards robot body (-X)
+            mat = demo.data.xmat[demo.model.body(f"inspire_{side}_base").id].reshape(3, 3)
+            palm_normal = -mat[:, 0]
+            self.assertLess(palm_normal[0], -0.70)
+            # Hand clearance above table is ~7cm
+            min_z = min(
+                demo.data.geom_xpos[g, 2] - (demo.model.geom_size[g, 2] if demo.model.geom_type[g] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_CYLINDER) else demo.model.geom_size[g, 0])
+                for g in range(demo.model.ngeom) if f"inspire_{side}" in (demo.model.body(demo.model.geom_bodyid[g]).name or "")
+            )
+            clearance = min_z - 0.40
+            self.assertGreaterEqual(clearance, 0.05)
+            self.assertLessEqual(clearance, 0.10)
 
     def test_robot_pedestal_and_bottle_are_on_table(self):
         model = build_five_finger_model(pick_bottle=True)
@@ -89,9 +99,14 @@ class MujocoSmokeTests(unittest.TestCase):
 
     def test_pick_scene_has_colored_mustard_bottle_and_basket(self):
         model = build_five_finger_model(pick_bottle=True)
-        color = model.geom("ycb_mustard_bottle_visual").rgba
-        self.assertGreater(color[0], color[1])
-        self.assertGreater(color[1], color[2])
+        geom = model.geom("ycb_mustard_bottle_visual")
+        # The visual geom should have a material with a loaded texture
+        # (the real Campbell's soup can label from P-161 YCB assets).
+        mat_id = geom.matid[0]
+        self.assertGreaterEqual(mat_id, 0, "visual geom must have a material")
+        tex_id = model.mat_texid[mat_id][1]  # slot 1 = diffuse map
+        self.assertGreaterEqual(tex_id, 0, "material must have a diffuse texture")
+        self.assertGreater(model.tex_height[tex_id], 0, "texture must have non-zero height")
         for name in ("place_basket_bottom", "place_basket_left", "place_basket_right", "place_basket_front", "place_basket_back"):
             self.assertGreaterEqual(model.geom(name).id, 0)
 

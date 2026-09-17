@@ -6,3 +6,8 @@ artifacts/*.json
 artifacts/*.csv
 MJMODEL.TXT
 MUJOCO_LOG.TXT
+artifacts/*.png
+!artifacts/natural_grasp_*.png
+!artifacts/perception_*.png
+scratch_*
+ycb_renders/
