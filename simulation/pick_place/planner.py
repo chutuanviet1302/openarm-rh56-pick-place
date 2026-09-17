@@ -91,11 +91,16 @@ class GraspPlanner:
         return orientation @ fingers, orientation @ thumb
 
     # ------------------------------------------------------------------ targets
-    def centers(self, object_position: np.ndarray, place_yaw_deg: float = 0.0) -> dict[str, np.ndarray]:
+    def centers(
+        self, object_position: np.ndarray, place_yaw_deg: float = 0.0, held_offset: np.ndarray | None = None
+    ) -> dict[str, np.ndarray]:
         """Wrist targets per phase, derived from the object, the basket and the jaw.
 
         `place_yaw_deg` turns the hand about world z on the release side only; the
-        grasp itself always uses the straight-wrist orientation.
+        grasp itself always uses the straight-wrist orientation. `held_offset` is the
+        object's *measured* position relative to the wrist (world axes, at the grasp
+        orientation) once it is in hand; when given, the set-down is planned from where
+        the object really sits instead of from the nominal jaw centre.
         """
         scene = self.scene
         bottle = np.asarray(object_position, dtype=float)
@@ -139,7 +144,10 @@ class GraspPlanner:
 
         drop = scene.basket_floor() + np.array([0.0, 0.0, 0.5 * height + C.PLACE_DROP_HEIGHT])
         turn = rotation_z(place_yaw_deg)
-        place = drop - turn @ jaw + C.JAW_AXIS_BIAS * (turn @ jaw_axis)
+        if held_offset is None:
+            place = drop - turn @ jaw + C.JAW_AXIS_BIAS * (turn @ jaw_axis)
+        else:
+            place = drop - turn @ held_offset
         transfer = place.copy()
         transfer[2] = lift[2]  # level carry above the rim
         return {
@@ -176,12 +184,24 @@ class GraspPlanner:
         joints["ready"] = joints["hover"]
         joints["lift"] = solve_pose_ik(self.model, "right", centers["lift"], self.orientation, joints["grasp"])
 
-        # The place side may turn the hand about the vertical: the can stays upright
-        # either way, and it lets the basket sit where the grasp orientation alone
-        # cannot reach. Every intermediate solution is kept as a carry waypoint.
+        plan = Plan(joints, {}, centers, 0.0)
+        self.plan_place(plan, object_position)
+        return plan
+
+    def plan_place(self, plan: Plan, object_position: np.ndarray, held_offset: np.ndarray | None = None) -> Plan:
+        """Solve transfer + set-down (in place, on `plan`) from the lift pose.
+
+        The place side may turn the hand about the vertical: the can stays upright
+        either way, and it lets the basket sit where the grasp orientation alone
+        cannot reach. Every intermediate solution is kept as a carry waypoint.
+        Called once at planning time with the nominal jaw, and again after the grasp
+        with the measured `held_offset` so the object -- not the wrist -- lands on the
+        basket centre.
+        """
+        joints = plan.joints
         failures = []
         for yaw in C.PLACE_YAW_CANDIDATES_DEG:
-            centers_yaw = self.centers(object_position, yaw)
+            centers_yaw = self.centers(object_position, yaw, held_offset)
             try:
                 transfer_path = self._walk(
                     centers_yaw["lift"], centers_yaw["transfer"], joints["lift"], C.CARRY_PATH_STEPS,
@@ -195,18 +215,21 @@ class GraspPlanner:
                 failures.append(f"yaw {yaw:+.0f}: {error}")
                 continue
             joints["transfer"], joints["lower"] = transfer_path[-1], lower_path[-1]
-            return Plan(joints, {"transfer": transfer_path, "lower": lower_path}, centers_yaw, yaw)
+            plan.paths = {"transfer": transfer_path, "lower": lower_path}
+            plan.centers = centers_yaw
+            plan.place_yaw_deg = yaw
+            return plan
         raise RuntimeError("no reachable transfer/set-down pose at any hand yaw:\n  " + "\n  ".join(failures))
 
     # ------------------------------------------------------------------ debugging
     def describe(self, plan: Plan) -> str:
         """Table of phase -> target wrist position, FK of the solution, position error, wrist pitch."""
-        lines = [f"{'phase':<10}{'target (x y z)':<28}{'reached (x y z)':<28}{'err mm':>8}{'wrist pitch':>13}"]
+        lines = [f"{'phase':<10}{'target (x y z)':<28}{'reached (x y z)':<28}{'err mm':>8}{'wrist bend':>13}"]
         for phase in PHASE_ORDER:
             target = plan.centers[phase]
             reached, _ = wrist_frame(self.model, "right", plan.joints[phase])
             error = np.linalg.norm(reached - target) * 1000
-            pitch = np.degrees(plan.joints[phase][C.WRIST_PITCH_INDEX])
+            pitch = np.degrees(np.hypot(*(plan.joints[phase][i] for i in C.WRIST_BEND_INDICES)))
             lines.append(
                 f"{phase:<10}{np.array2string(target, precision=3):<28}{np.array2string(reached, precision=3):<28}"
                 f"{error:>8.1f}{pitch:>12.1f}"

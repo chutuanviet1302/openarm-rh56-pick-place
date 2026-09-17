@@ -109,6 +109,22 @@ class Executor:
         yaw_actuator, _, opposed = scene.thumb_yaw[side]
         self.data.ctrl[yaw_actuator] = opposed
 
+    def open_fingers(self, side: str, fingers: tuple[str, ...], seconds: float, release_thumb_yaw: bool = False) -> None:
+        """Ramp the named fingers' ctrl to their open values over `seconds`; with
+        `release_thumb_yaw` the thumb also swings out of opposition."""
+        scene = self.scene
+        targets = {scene.finger_actuator[side][name]: scene.open_ctrl[side][name] for name in fingers}
+        if release_thumb_yaw:
+            yaw_actuator, unopposed, _ = scene.thumb_yaw[side]
+            targets[yaw_actuator] = unopposed
+        start = {actuator: float(self.data.ctrl[actuator]) for actuator in targets}
+        steps = self.seconds_to_steps(seconds)
+        for index in range(steps):
+            fraction = (index + 1) / steps
+            for actuator, target in targets.items():
+                self.data.ctrl[actuator] = start[actuator] + (target - start[actuator]) * fraction
+            self._step()
+
     def close_until_contact(self, side: str, fingers: tuple[str, ...], force_target: float = C.CONTACT_FORCE_TARGET_N) -> dict[str, float]:
         """Close `fingers` a small step at a time, holding each once it presses with
         `force_target`. Fingers are driven only through ctrl; the contact solver is what
@@ -137,6 +153,24 @@ class Executor:
         for _ in range(settle * 4):  # settle at the final pressure
             self._step()
         return scene.finger_contact_forces(side)
+
+    # ------------------------------------------------------------------ set-down
+    def descend_until(self, side: str, orientation: np.ndarray, stop, max_depth: float = C.SET_DOWN_MAX_DEPTH) -> float:
+        """Lower the wrist straight down in SET_DOWN_STEP increments until `stop()` is
+        true (e.g. the object touches the basket floor) or `max_depth` is reached.
+        Returns how far the wrist went down. Collisions of the hand with the basket
+        still abort through _step()."""
+        scene = self.scene
+        seed = self.data.ctrl[scene.arm_actuators[side]].copy()
+        start_z = float(scene.wrist_position(side)[2])
+        target = scene.wrist_position(side).copy()
+        descended = 0.0
+        while not stop() and descended < max_depth:
+            descended += C.SET_DOWN_STEP
+            target[2] = start_z - descended
+            seed = solve_pose_ik(self.model, side, target, orientation, seed)
+            self.move_to({f"{side}_arm": seed}, C.SET_DOWN_STEP_SECONDS)
+        return descended
 
     # ------------------------------------------------------------------ proof lift
     def proof_lift(self) -> tuple[float, float, float]:

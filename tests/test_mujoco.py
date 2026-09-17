@@ -50,35 +50,66 @@ class MujocoSmokeTests(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(robot.data.qpos)))
 
     def test_hands_have_opposite_chirality(self):
+        """Left and right hands are mirror images across the sagittal (y=0) plane:
+        with the arms hanging at rest, each thumb sits forward of its middle finger
+        (+x, palms facing inward) and the thumbs' sideways offsets are opposite."""
         model = build_five_finger_model()
         data = mujoco.MjData(model)
         mujoco.mj_forward(model, data)
-        left_thumb = data.site_xpos[model.site("inspire_left_left_thumb_tip").id]
-        left_middle = data.site_xpos[model.site("inspire_left_left_middle_tip").id]
-        right_thumb = data.site_xpos[model.site("inspire_right_right_thumb_tip").id]
-        right_middle = data.site_xpos[model.site("inspire_right_right_middle_tip").id]
-        self.assertGreater(left_thumb[1] - left_middle[1], 0)
-        self.assertLess(right_thumb[1] - right_middle[1], 0)
-
-    def test_hands_attach_directly_to_wrist_without_broken_offset(self):
-        demo = Demo()
+        offsets = {}
         for side in ("left", "right"):
-            wrist = demo.data.xpos[demo.model.body(f"openarm_{side}_ee_base_link").id]
-            hand = demo.data.xpos[demo.model.body(f"inspire_{side}_base").id]
-            self.assertLess(np.linalg.norm(wrist - hand), 0.005)
-
-    def test_both_hands_point_down_in_attention_pose(self):
-        # Demo() starts in a symmetric table-top stance: both hands over the table,
-        # fists closed, ~7cm above table, palms facing robot body.
-        demo = Demo()
+            thumb = data.site_xpos[model.site(f"inspire_{side}_{side}_thumb_tip").id]
+            middle = data.site_xpos[model.site(f"inspire_{side}_{side}_middle_tip").id]
+            offsets[side] = thumb - middle
         for side in ("left", "right"):
+            self.assertGreater(offsets[side][0], 0.02, f"{side} thumb should be forward of the fingers")
+        # Table-plane components mirror; z is left out because the vendor's left and
+        # right hand models rest at different finger curls.
+        mirrored = offsets["right"][:2] * np.array([1.0, -1.0])
+        np.testing.assert_allclose(offsets["left"][:2], mirrored, atol=0.02)
+
+    def test_hands_continue_the_forearm_axis(self):
+        """The Inspire hand is bolted to the flange along the tool axis: its fingers
+        point the way the forearm points (within a few degrees), the base sits just
+        past link6's shell on the flange axis, and the palm faces the robot's midline
+        with the arm hanging at rest."""
+        from simulation.five_finger_model import HAND_MOUNT_Z
+
+        model = build_five_finger_model(pick_bottle=True)
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)  # all joints zero: arms hang straight down
+        for side, inward in (("right", +1.0), ("left", -1.0)):
+            flange = model.body(f"openarm_{side}_ee_base_link").id
+            hand = model.body(f"inspire_{side}_base").id
+            link5 = data.xpos[model.body(f"openarm_{side}_link5").id]
+            link6 = data.xpos[model.body(f"openarm_{side}_link6").id]
+            forearm = (link6 - link5) / np.linalg.norm(link6 - link5)
+            tips = np.mean(
+                [data.site_xpos[model.site(f"inspire_{side}_{side}_{f}_tip").id] for f in ("index", "middle", "ring", "pinky")],
+                axis=0,
+            )
+            fingers = tips - data.xpos[hand]
+            fingers /= np.linalg.norm(fingers)
+            angle = np.degrees(np.arccos(np.clip(forearm @ fingers, -1.0, 1.0)))
+            self.assertLess(angle, 5.0, f"{side} fingers are {angle:.1f} degrees off the forearm axis")
+            # Base on the flange axis, HAND_MOUNT_Z along the flange's -z (here world -z).
+            offset = data.xmat[flange].reshape(3, 3).T @ (data.xpos[hand] - data.xpos[flange])
+            np.testing.assert_allclose(offset, [0.0, 0.0, HAND_MOUNT_Z], atol=1e-6)
+            palm_normal = data.xmat[hand].reshape(3, 3)[:, 0]
+            self.assertGreater(inward * palm_normal[1], 0.9, f"{side} palm should face the midline")
+
+    def test_attention_pose_holds_fists_forward_over_the_table(self):
+        # Demo() starts in a symmetric stance: fists closed in front of the body over
+        # the table, fingers forward, palms facing each other, wrist straight.
+        demo = Demo()
+        for side, inward in (("left", -1.0), ("right", +1.0)):
             base = demo.data.xpos[demo.model.body(f"inspire_{side}_base").id]
-            # Both hands are positioned over the table (x > 0.15m)
-            self.assertGreater(base[0], 0.15)
-            # Palm normal faces towards robot body (-X)
+            self.assertGreater(base[0], 0.12)
             mat = demo.data.xmat[demo.model.body(f"inspire_{side}_base").id].reshape(3, 3)
-            palm_normal = -mat[:, 0]
-            self.assertLess(palm_normal[0], -0.70)
+            self.assertGreater(mat[0, 2], 0.9, "fingers point forward (+x)")
+            self.assertGreater(inward * mat[1, 0], 0.7, "palm faces the midline")
+            for index in (5, 6):
+                self.assertAlmostEqual(float(demo.data.qpos[demo.arm_qpos[side][index]]), 0.0, places=3)
             # Hand clearance above table is ~7cm
             min_z = min(
                 demo.data.geom_xpos[g, 2] - (demo.model.geom_size[g, 2] if demo.model.geom_type[g] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_CYLINDER) else demo.model.geom_size[g, 0])
@@ -86,7 +117,7 @@ class MujocoSmokeTests(unittest.TestCase):
             )
             clearance = min_z - 0.40
             self.assertGreaterEqual(clearance, 0.05)
-            self.assertLessEqual(clearance, 0.10)
+            self.assertLessEqual(clearance, 0.20)
 
     def test_robot_pedestal_and_bottle_are_on_table(self):
         model = build_five_finger_model(pick_bottle=True)

@@ -237,6 +237,14 @@ class Scene:
             forces[finger] += abs(float(wrench[0]))
         return forces
 
+    def object_touches(self, geom_name: str) -> bool:
+        """True while the object's collision geom is in contact with `geom_name`."""
+        other = self.model.geom(geom_name).id
+        for contact in self.data.contact[: self.data.ncon]:
+            if {contact.geom1, contact.geom2} == {self.object_geom, other} and float(contact.dist) < 0.001:
+                return True
+        return False
+
     def contact_groups(self, side: str) -> set[str]:
         """{'thumb', 'fingers'} subsets currently touching the object: the hand as a two-jaw gripper."""
         groups: set[str] = set()

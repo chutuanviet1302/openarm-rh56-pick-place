@@ -28,8 +28,8 @@ HAND_PREFIX = "inspire_"
 # wrist (see pick_place_demo.NATURAL_GRASP_JOINTS) puts the hand's jaw; B is the
 # nearest spot 15cm+ away that the same orientation still reaches. Both can be
 # overridden per run (`pick_place_demo --object X Y --basket X Y`).
-PICK_POSITION_A = (0.25, -0.40)
-BASKET_POSITION_B = (0.42, -0.18)
+PICK_POSITION_A = (0.396, -0.275)
+BASKET_POSITION_B = (0.40, -0.02)
 BASKET_FLOOR_Z = 0.405
 # How far the pedestal and both shoulders sit above the stock model's origin. This
 # sets how far the arms have to reach *down* to work on the table, so it decides
@@ -40,10 +40,28 @@ BASKET_FLOOR_Z = 0.405
 # wrist at 0.635 -- so no grasp of it was reachable at all, at any tilt or position.
 # At 0.30 every candidate object position on the right-hand side of the table solves.
 PEDESTAL_RAISE = 0.10
-# ponytail: provisional flange transforms; replace these two constants with measured CAD transforms.
+# Flange -> Inspire hand base transform, derived from the two frames rather than tuned:
+#
+#   OpenArm v2 ee_base_link: the tool axis is -z (the chain runs 0 0 -L, the stock
+#   gripper fingers sit at z=-0.068); link6's collision shell ends at z=-0.0285.
+#   Inspire RH56 base frame:  +z = fingers forward, +x = palm side (fingers curl
+#   toward +x), y across the palm (right hand: index/thumb at +y, pinky at -y).
+#
+# The hand therefore continues the forearm: hand +z -> flange -z, and the palm faces
+# the robot's midline with the thumb forward when the arm hangs at rest (right hand:
+# palm +y, thumb +x; left hand mirrored). Both are 180-degree rotations, about
+# (1,1,0)/sqrt2 for the right and (1,-1,0)/sqrt2 for the left. The base sits just past
+# link6's shell with a 1cm adapter plate in between (HAND_ADAPTER_THICKNESS).
+#
+# The earlier transform (180 degrees about (1,0,-1)) sent hand +z to flange -x, i.e.
+# the fingers stuck out sideways at 80 degrees to the forearm, which is what made the
+# hand look bolted on wrong and bent the wrist joints to compensate.
+LINK6_SHELL_END = -0.0285
+HAND_ADAPTER_THICKNESS = 0.010
+HAND_MOUNT_Z = LINK6_SHELL_END - HAND_ADAPTER_THICKNESS
 MOUNTS = {
-    "left": ((0.0, 0.0, 0.0), (0.0, 0.70710678, 0.0, -0.70710678)),
-    "right": ((0.0, 0.0, 0.0), (0.0, 0.70710678, 0.0, -0.70710678)),
+    "right": ((0.0, 0.0, HAND_MOUNT_Z), (0.0, 0.70710678, 0.70710678, 0.0)),
+    "left": ((0.0, 0.0, HAND_MOUNT_Z), (0.0, 0.70710678, -0.70710678, 0.0)),
 }
 
 
@@ -62,8 +80,19 @@ def _attach_hand(arm: mujoco.MjSpec, side: str) -> None:
     root.pos = np.zeros(3)
     root.quat = np.array([1.0, 0.0, 0.0, 0.0])
     position, quaternion = MOUNTS[side]
-    mount = arm.body(f"openarm_{side}_ee_base_link").add_frame(pos=position, quat=quaternion)
+    flange = arm.body(f"openarm_{side}_ee_base_link")
+    mount = flange.add_frame(pos=position, quat=quaternion)
     mount.attach_body(root, prefix=f"{HAND_PREFIX}{side}_")
+    # Visual adapter plate between link6's shell and the hand base (no collision).
+    flange.add_geom(
+        name=f"{HAND_PREFIX}{side}_adapter",
+        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        pos=[0.0, 0.0, LINK6_SHELL_END - 0.5 * HAND_ADAPTER_THICKNESS],
+        size=[0.028, 0.5 * HAND_ADAPTER_THICKNESS, 0.0],
+        rgba=[0.75, 0.75, 0.78, 1.0],
+        contype=0,
+        conaffinity=0,
+    )
 
     # Remove the bulky stock gripper-base and camera casing from the wrist
     # so the Inspire hand connects cleanly and directly to the forearm link.

@@ -153,9 +153,9 @@ class Demo:
                 f"increase APPROACH_STANDOFF (currently {C.APPROACH_STANDOFF:.2f}m)"
             )
         ex.move_to({"right_arm": plan["grasp"]}, C.MOVE_TO_GRASP)
-        pitch = float(np.degrees(self.data.qpos[scene.arm_qpos["right"][C.WRIST_PITCH_INDEX]]))
-        self.log.record("wrist_pitch_at_grasp_deg", pitch)
-        self.log.note(f"wrist pitch at grasp: {pitch:+.1f} degrees (0 = hand in line with forearm)")
+        bend = [float(np.degrees(self.data.qpos[scene.arm_qpos["right"][i]])) for i in C.WRIST_BEND_INDICES]
+        self.log.record("wrist_pitch_at_grasp_deg", float(np.hypot(*bend)))
+        self.log.note(f"wrist bend at grasp: joint6 {bend[0]:+.1f}, joint7 {bend[1]:+.1f} degrees (0 = hand in line with forearm)")
 
     def phase_grasp(self) -> None:
         ex, scene = self.executor, self.scene
@@ -197,9 +197,17 @@ class Demo:
         return clearance
 
     def phase_carry(self) -> None:
-        ex, plan = self.executor, self.plan
+        ex, plan, scene = self.executor, self.plan, self.scene
         ex.move_to({"right_arm": plan["lift"]}, C.MOVE_TO_LIFT)
         clearance = self._check_carry_clearance("lift")
+        # Re-plan the set-down from where the object actually sits in the hand: the
+        # fingers never close exactly on the nominal jaw centre, and that few-mm offset
+        # otherwise turns into a placement error (2.5cm measured with the nominal jaw).
+        held = scene.object_position() - scene.wrist_position("right")
+        held_at_grasp_orientation = scene.grasp_orientation @ scene.wrist_rotation("right").T @ held
+        self.planner.plan_place(plan, self.object_position(), held_offset=held_at_grasp_orientation)
+        self.log.record("held_offset_m", held_at_grasp_orientation)
+        self.log.note(f"object held {np.round(held_at_grasp_orientation, 3).tolist()} from the wrist; set-down re-planned")
         self.log.record("carry_clearance_above_rim_m", clearance)
         self.log.note(f"object bottom is {clearance*100:+.1f}cm above the basket rim; transferring A -> B")
         path = plan.paths["transfer"]
@@ -208,10 +216,24 @@ class Demo:
         self.log.note("lowering the object into the basket")
         path = plan.paths["lower"]
         ex.follow({"right_arm": path}, [C.LOWER_SECONDS / len(path)] * len(path))
+        # Set the object down for real: keep descending until it rests on the floor.
+        from simulation.pick_place.kinematics import rotation_z
+
+        orientation = rotation_z(plan.place_yaw_deg) @ scene.grasp_orientation
+        went = ex.descend_until("right", orientation, lambda: scene.object_touches("place_basket_bottom"))
+        touching = scene.object_touches("place_basket_bottom")
+        self.log.record("set_down_descent_m", went)
+        self.log.note(f"descended {went*100:.1f}cm more; object {'rests on' if touching else 'is NOT on'} the basket floor")
+        if not touching:
+            raise RuntimeError(f"set-down failed: object still off the floor after {went*100:.1f}cm of descent")
 
     def phase_release(self) -> None:
         ex, plan, scene = self.executor, self.plan, self.scene
-        ex.move_to({"right_arm": plan["lower"], "right_hand": scene.open_hand["right"]}, C.RELEASE_SECONDS)
+        # The object already rests on the floor (phase_carry), so opening cannot drop it;
+        # fingers first, then the thumb swings out of opposition.
+        ex.open_fingers("right", ("index", "middle", "ring", "pinky"), 0.5 * C.RELEASE_SECONDS)
+        ex.open_fingers("right", ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
+        ex.move_to({"right_hand": scene.open_hand["right"]}, 0.3)
         # Vertical retreat straight up out of the basket, then home.
         ex.move_to({"right_arm": plan["transfer"]}, C.RETREAT_SECONDS)
         ex.move_to({"right_arm": plan["hover"], "right_hand": scene.closed_hand["right"]}, C.RETURN_SECONDS)

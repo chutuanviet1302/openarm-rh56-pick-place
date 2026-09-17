@@ -72,10 +72,12 @@ un_gui.bat --object 0.25 -0.40 --basket 0.42 -0.18
 .\.venv\Scripts\python.exe -m simulation.pick_place_demo --plan-only
 
 # Dừng sau một phase để soi cảnh (perceive|plan|ready|reach|grasp|carry|release)
-.un_gui.bat --stop-after grasp --camera close_grasp
+.
+un_gui.bat --stop-after grasp --camera close_grasp
 
 # Log chi tiết: vị trí vật + wrist sau mỗi phase; --trace in pose + lực ngón mỗi 0.5 s sim
-.un_gui.bat --verbose --trace 0.5
+.
+un_gui.bat --verbose --trace 0.5
 ```
 
 Cấu trúc code (`simulation/pick_place/`): `config.py` (mọi tham số) → `kinematics.py` (IK/FK) → `scene.py` (model, index, hình học, contact) → `planner.py` (target + chuỗi IK) → `executor.py` (bước vật lý qua `ctrl`, abort khi va chạm) → `demo.py` (7 phase `phase_*`) → `episode.py` (log + `TrialResult`) → `cli.py`. `simulation/pick_place_demo.py` chỉ là lối vào tương thích.
@@ -83,7 +85,7 @@ Cấu trúc code (`simulation/pick_place/`): `config.py` (mọi tham số) → `
 ### Tiêu chí một trial đạt (không có weld / carry-assist / ghi qpos vật)
 
 1. Vật đứng trên mặt bàn (đáy mesh = đáy collision = `TABLE_TOP_Z`).
-2. Cổ tay thẳng tại grasp: hướng nắm là FK của `NATURAL_GRASP_JOINTS` (joint6 ≈ 0°), bàn tay nối tiếp cẳng tay.
+2. Cổ tay thẳng tại grasp: hướng nắm là FK của `NATURAL_GRASP_JOINTS` (joint6 ≈ joint7 ≈ 0°), bàn tay nối tiếp cẳng tay; tay vươn về phía trước, lòng bàn tay hướng vào giữa.
 3. Cả 5 ngón có lực pháp tuyến ≥ 0.5 N trước khi nhấc.
 4. Proof-lift: tay nâng ≥ 3 cm và vật trượt ≤ 1 cm so với tay.
 5. Đáy vật cao hơn mép rổ ≥ 5 cm khi mang; hạ xuống cách đáy rổ 3 cm rồi mới mở tay.
@@ -91,7 +93,7 @@ Cấu trúc code (`simulation/pick_place/`): `config.py` (mọi tham số) → `
 
 Mỗi trial ghi đủ: bố cục A/B, vị trí perception + sai số so với ground truth, lực 5 ngón, wrist pitch, proof-lift, clearance, yaw đặt, wrist position và joint target theo từng phase.
 
-`simulation/five_finger_model.py` gắn model Inspire RH56DFX 6-DOF/12-joint vào mỗi flange. Transform mount hiện là giá trị hiệu chỉnh mô phỏng; phải thay bằng transform CAD/đo thực tế trước khi đồng nhất sim-to-real.
+`simulation/five_finger_model.py` gắn model Inspire RH56 (6-DOF/12-joint) vào mỗi flange. Transform mount **suy ra từ hai hệ trục**, không tune tay: trục dụng cụ của `ee_base_link` OpenArm v2 là −z (chuỗi link chạy `0 0 −L`, gripper gốc ở z = −0.068); hệ trục gốc bàn tay Inspire có +z = hướng ngón, +x = lòng bàn tay. Bàn tay do đó nối tiếp cẳng tay (lệch < 3°), lòng bàn tay hướng vào thân, ngón cái phía trước khi tay buông thõng; đế tay đặt sau vỏ link6 (−0.0285) qua tấm adapter 1 cm. Kiểm tra bằng `tests/test_mujoco.py::test_hands_continue_the_forearm_axis`. Ảnh: `artifacts/mount_check_*.png`. Độ dày adapter là giá trị giả định — thay bằng CAD thật trước sim-to-real.
 
 `simulation/vision_detector.py` là pipeline perception trong sim (cùng cấu trúc với `openarm_pick_place/perception.py` trên robot thật): segment màu → depth → pinhole deprojection → camera→world → fit đường tròn bán kính đã biết; sai số đo được ≤ 5 mm trên 20 vị trí. Không đọc pose vật từ sim; không thấy vật thì trial fail vì perception.
 

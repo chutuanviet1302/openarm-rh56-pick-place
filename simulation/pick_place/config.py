@@ -22,19 +22,26 @@ EE_SITE = {"left": "left_ee_control_point", "right": "right_ee_control_point"}
 BOTTLE_JOINT = "pick_bottle_joint"
 OBJECT_GEOM = "pick_bottle_collision"
 FINGER_NAMES = ("thumb", "index", "middle", "ring", "pinky")
-WRIST_PITCH_INDEX = 5  # openarm joint6: the wrist's pitch (bend) axis
+# OpenArm v2 wrist: joint5 = forearm roll, joint6 (axis y) and joint7 (axis x) are the
+# two bend axes of the wrist. "Hand in line with the forearm" means both are zero.
+WRIST_PITCH_INDEX = 5
+WRIST_BEND_INDICES = (5, 6)
 
 # --------------------------------------------------------------------------- posture
-# Reference grasp posture for the right arm with the wrist *straight* (joint6 = 0), so
-# hand and forearm form one line the way a person's do when picking a bottle up from
-# the side. Found by sweeping straight-wrist configurations for one whose jaw lands on
-# the table at can-waist height with the fingers horizontal. The grasp orientation and
-# the default pick point A are both derived from it by forward kinematics.
-NATURAL_GRASP_JOINTS = np.array([0.355, 0.375, -0.834, 0.573, -0.901, 0.0, -0.555])
+# Reference grasp posture for the right arm with the wrist *straight* (joint6 = joint7
+# = 0), so hand and forearm form one line the way a person's do when picking a bottle
+# up from the side. Found by sweeping straight-wrist configurations for one whose jaw
+# lands on the table at can-waist height with the fingers near horizontal. The grasp
+# orientation and the default pick point A are both derived from it by forward
+# kinematics. With the hand mounted along the flange axis (five_finger_model.MOUNTS), this posture
+# reaches forward over the table with the palm facing the midline, fingers pointing
+# +x and tilted 22 degrees down, wrist bend 1.8 / -0.6 degrees.
+NATURAL_GRASP_JOINTS = np.array([-0.041, 0.331, 0.14, 1.214, 0.314, 0.032, -0.011])
 RIGHT_SEED = NATURAL_GRASP_JOINTS
-# Symmetric table-top attention stance: fists closed ~7cm over the table, palms toward
-# the body. The left arm mirrors the right (see Scene.attention_pose).
-ATTENTION_RIGHT = np.array([0.37, 0.40, 0.0, 1.15, 0.0, -0.55, 0.0])
+# Symmetric attention stance; the left arm mirrors the right (see Scene.attention_pose).
+# Fists held in front of the body over the table (elbow ~108 degrees), fingers forward,
+# palms facing each other, ~13cm above the table, wrist straight.
+ATTENTION_RIGHT = np.array([-0.383, 0.726, 0.051, 1.893, 0.108, 0.0, 0.0])
 
 # --------------------------------------------------------------------------- IK
 IK_MAX_ITERATIONS = 6000
@@ -71,10 +78,14 @@ CARRY_CLEARANCE_ABOVE_RIM = 0.05
 # The servos sag under the can's weight, so the plan asks for this much extra; the
 # requirement above is what gets checked.
 CARRY_CLEARANCE_MARGIN = 0.01
-# Height of the object's bottom above the basket floor when the hand opens: set it
-# down, do not drop it. 3cm is the lowest the wrapped hand goes before the pinky (the
-# lowest digit) meets the basket wall; 2cm and 1cm both collide.
-PLACE_DROP_HEIGHT = 0.03
+# Planned height of the object's bottom above the basket floor at the end of the
+# lowering path. From there the hand keeps descending in small steps until the object
+# actually touches the floor (SET_DOWN_*), and only then opens: releasing a can that is
+# still in the air let the opening thumb lever it 5cm up and it landed 3cm off.
+PLACE_DROP_HEIGHT = 0.02
+SET_DOWN_STEP = 0.004
+SET_DOWN_MAX_DEPTH = 0.04
+SET_DOWN_STEP_SECONDS = 0.15
 # The carried object stays upright under any rotation about world z, so the place side
 # may turn the hand about the vertical to wherever the arm reaches best. First
 # candidate whose transfer *and* set-down poses both solve wins.
@@ -108,13 +119,13 @@ CLOSE_MAX_ITERATIONS = 120
 # A contact only counts as a crash once it is deeper than this: MuJoCo reports contact
 # slightly before the surfaces interpenetrate.
 TABLE_CONTACT_TOLERANCE = 0.003
-BASKET_CONTACT_TOLERANCE = 0.001
+BASKET_CONTACT_TOLERANCE = 0.003  # same graze allowance as the table
 
 # --------------------------------------------------------------------------- randomization
 # Sampling boxes (table-plane x, y) covering the region the straight-wrist grasp reaches.
 # Every sample is still verified by IK before physics runs (demo.sample_layout).
-RANDOM_PICK_BOX = ((0.20, 0.32), (-0.44, -0.36))
-RANDOM_BASKET_BOX = ((0.36, 0.46), (-0.24, -0.12))
+RANDOM_PICK_BOX = ((0.36, 0.44), (-0.32, -0.22))
+RANDOM_BASKET_BOX = ((0.34, 0.46), (-0.08, 0.04))
 MIN_PICK_TO_BASKET_M = 0.15
 # The wrapped hand reaches ~8cm beyond the can's surface, so the basket's nearest wall
 # must stay this far from the object's centre or the thumb clips it at grasp.

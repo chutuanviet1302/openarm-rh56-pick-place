@@ -20,7 +20,7 @@ from simulation.pick_place.config import (
     IK_ROTATION_TOLERANCE,
     IK_ROTATION_WEIGHT,
     NATURAL_GRASP_JOINTS,
-    WRIST_PITCH_INDEX,
+    WRIST_BEND_INDICES,
     WRIST_STRAIGHT_GAIN,
 )
 
@@ -121,7 +121,8 @@ def solve_pose_ik(
         update = pseudo_inverse @ error
         # Secondary task in the nullspace of the pose task: straighten the wrist.
         posture = np.zeros(n)
-        posture[WRIST_PITCH_INDEX] = -WRIST_STRAIGHT_GAIN * data.qpos[qpos_ids[WRIST_PITCH_INDEX]]
+        for index in WRIST_BEND_INDICES:
+            posture[index] = -WRIST_STRAIGHT_GAIN * data.qpos[qpos_ids[index]]
         update += (np.eye(n) - pseudo_inverse @ jacobian) @ posture
         step = np.linalg.norm(update)
         if step > IK_MAX_STEP:
