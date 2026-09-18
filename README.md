@@ -38,7 +38,7 @@ Trước khi chạy motion, TF `base_link ← camera_color_optical_frame`, MoveI
 
 ## Chạy MuJoCo
 
-Model OpenArm v2 chính thức được cung cấp bởi `openarm-mujoco`. Viewer thay cả hai gripper bằng Inspire RH56DFX trái/phải từ `correlllab/rh56_controller`.
+Robot của lab là **OpenArm v1** (mentor xác nhận 18/09). MJCF v1 lấy từ `enactic/openarm_mujoco` và vendor vào `assets/openarm_v1/` (gói pip chỉ có v2). `simulation/openarm_mujoco.py` thay motor mô-men bằng position servo (gain + damping/armature của v2, timestep 1 ms), thêm site flange `*_ee_control_point` trên `link7`. Viewer thay cả hai gripper bằng Inspire RH56DFX trái/phải từ `correlllab/rh56_controller`.
 
 ```powershell
 # Smoke test không mở cửa sổ
@@ -93,7 +93,7 @@ Cấu trúc code (`simulation/pick_place/`): `config.py` (mọi tham số) → `
 
 Mỗi trial ghi đủ: bố cục A/B, vị trí perception + sai số so với ground truth, lực 5 ngón, wrist pitch, proof-lift, clearance, yaw đặt, wrist position và joint target theo từng phase.
 
-`simulation/five_finger_model.py` gắn model Inspire RH56 (6-DOF/12-joint) vào mỗi flange. Transform mount **suy ra từ hai hệ trục**, không tune tay: trục dụng cụ của `ee_base_link` OpenArm v2 là −z (chuỗi link chạy `0 0 −L`, gripper gốc ở z = −0.068); hệ trục gốc bàn tay Inspire có +z = hướng ngón, +x = lòng bàn tay. Bàn tay do đó nối tiếp cẳng tay (lệch < 3°), lòng bàn tay hướng vào thân, ngón cái phía trước khi tay buông thõng; đế tay đặt sau vỏ link6 (−0.0285) qua tấm adapter 1 cm. Kiểm tra bằng `tests/test_mujoco.py::test_hands_continue_the_forearm_axis`. Ảnh: `artifacts/mount_check_*.png`. Độ dày adapter là giá trị giả định — thay bằng CAD thật trước sim-to-real.
+`simulation/five_finger_model.py` gắn model Inspire RH56 (6-DOF/12-joint) vào mỗi flange. Transform mount **suy ra từ hai hệ trục**, không tune tay: trục dụng cụ của OpenArm v1 là +z của `link7` (gripper gốc bắt vào mặt flange z = 0.0955); hệ trục gốc bàn tay Inspire có +z = hướng ngón, +x = lòng bàn tay. Bàn tay do đó nối tiếp cẳng tay (lệch 2.0°/2.9°), lòng bàn tay hướng vào thân, ngón cái phía trước khi tay buông thõng (phải: quay −90° quanh z; trái: +90°); đế tay đặt trên mặt flange qua tấm adapter 1 cm. Kiểm tra bằng `tests/test_mujoco.py::test_hands_continue_the_forearm_axis`. Tư thế nắm/tư thế chờ tham chiếu suy bằng `python -m scripts.sweep_postures` — chạy lại khi đổi model tay/cánh tay. Độ dày adapter là giả định — thay bằng CAD thật trước sim-to-real.
 
 `simulation/vision_detector.py` là pipeline perception trong sim (cùng cấu trúc với `openarm_pick_place/perception.py` trên robot thật): segment màu → depth → pinhole deprojection → camera→world → fit đường tròn bán kính đã biết; sai số đo được ≤ 5 mm trên 20 vị trí. Không đọc pose vật từ sim; không thấy vật thì trial fail vì perception.
 
@@ -101,7 +101,7 @@ Mỗi trial ghi đủ: bố cục A/B, vị trí perception + sai số so với 
 
 1. Sao chép `config.example.json` thành `config.json`, điền đúng topic/action/frame và giới hạn workspace đã đo.
 2. Sao chép `calibration.example.json` thành `calibration.json`; thay ma trận identity bằng `T_base_camera` đã kiểm tra trên lưới 3x3.
-3. Cung cấp MJCF/URDF và mapping actuator của tay 5 ngón thực tế; OpenArm v2 đã dùng model chính thức.
+3. Cung cấp MJCF/URDF và mapping actuator của tay 5 ngón thực tế (RH56F1); OpenArm v1 đã dùng model chính thức.
 4. Viết adapter ROS 2 quanh controller hiện có, giữ E-stop và giới hạn của lab làm lớp bảo vệ cuối.
 
 ## Gate an toàn

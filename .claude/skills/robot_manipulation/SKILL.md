@@ -26,7 +26,7 @@ và cách áp dụng vào project này:
    tay (`_jaw_offsets`); độ cao nâng = mép rổ + `CARRY_CLEARANCE_ABOVE_RIM`; hướng nắm = FK của
    `NATURAL_GRASP_JOINTS` (cổ tay thẳng). Khi cần đổi hành vi, đổi *quy tắc suy ra*, không
    vá thêm hằng số bias.
-3. **Mount bàn tay suy từ hệ trục, không tune.** Trục dụng cụ OpenArm v2 = −z của `ee_base_link`;
+3. **Mount bàn tay suy từ hệ trục, không tune.** Trục dụng cụ OpenArm v1 = +z của `link7` (mặt flange z = 0.0955);
    Inspire +z = ngón, +x = lòng bàn tay. Ngón phải nằm trên trục cẳng tay (< 5°); kiểm tra bằng
    `test_hands_continue_the_forearm_axis` và render ở tư thế zero trước khi làm gì khác.
 4. **Tư thế tự nhiên.** Bàn tay nối tiếp cẳng tay (joint6 ≈ joint7 ≈ 0°), nắm ngang thân vật như người

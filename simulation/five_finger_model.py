@@ -5,7 +5,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from simulation.openarm_mujoco import official_model_path
+from simulation.openarm_mujoco import FLANGE_Z, configure_arm_servos, load_openarm_spec
 
 INSPIRE_ROOT = Path(__file__).parents[1] / "assets/rh56_controller/h1_mujoco/archive/inspire"
 # High-quality YCB object assets from P-161 project (mesh + texture).
@@ -28,97 +28,72 @@ HAND_PREFIX = "inspire_"
 # wrist (see pick_place_demo.NATURAL_GRASP_JOINTS) puts the hand's jaw; B is the
 # nearest spot 15cm+ away that the same orientation still reaches. Both can be
 # overridden per run (`pick_place_demo --object X Y --basket X Y`).
-PICK_POSITION_A = (0.396, -0.275)
-BASKET_POSITION_B = (0.40, -0.02)
+PICK_POSITION_A = (0.421, -0.332)
+BASKET_POSITION_B = (0.42, -0.04)
 BASKET_FLOOR_Z = 0.405
 # Basket inner half-width and wall height. Sized for the hand, not the can: with a
 # horizontal side grasp the palm's underside is only 3cm above the can's bottom at
 # 8cm behind the can and ~7-10cm at 12cm behind it (measured hand profile), so a wall
 # 5cm tall must be at least 12cm from the can's centre for the can to reach the floor
 # without the palm resting on the rim. A 16cm basket left the palm sitting on the wall.
-BASKET_HALF_WIDTH = 0.12
+BASKET_HALF_WIDTH = 0.16
 BASKET_WALL_HEIGHT = 0.05
 BASKET_WALL_THICKNESS = 0.01
-# How far the pedestal and both shoulders sit above the stock model's origin. This
-# sets how far the arms have to reach *down* to work on the table, so it decides
-# whether the object sits in the middle of the workspace or at its lower edge.
-#
-# 0.40 put the shoulders 70cm above the table. The wrist could then not get below
-# z 0.72 anywhere over the table, but grasping the 10cm can at its waist needs the
-# wrist at 0.635 -- so no grasp of it was reachable at all, at any tilt or position.
-# At 0.30 every candidate object position on the right-hand side of the table solves.
+# How far the whole robot (pedestal + both shoulders) is raised above the v1 model's
+# origin. v1 puts the shoulders at z=0.698 on the floor; with the table top at 0.40
+# that is only 0.30 above the work surface. 0.10 puts them at 0.798, the height every
+# reach analysis in this project was done at (the v2 setup used the same value).
 PEDESTAL_RAISE = 0.10
-# The stock pedestal is a floor-standing unit: a 20cm-tall base block, a bare square
-# column and the torso housing the shoulders bolt to. Here the robot stands ON the
-# table, so the base block is moved up onto the table top and the column shortened by
-# the same amount, leaving the torso (and therefore the arms' reach) exactly where it
-# was. Done on the mesh itself (vertices below PEDESTAL_CUT_Z shifted up by
-# PEDESTAL_BASE_LIFT); the column has no intermediate vertices, so it simply shortens.
-PEDESTAL_CUT_Z = 0.35          # world z separating the base block from the column
-PEDESTAL_BASE_LIFT = 0.30      # foot 0.10 -> 0.40 = TABLE_TOP_Z
-PEDESTAL_ASSET_DIR = Path(__file__).resolve().parent.parent / "assets" / "openarm"
+# The stock v1 pedestal is a floor-standing unit: a 22cm base block (visual_1/_4 plus
+# two small plates _0/_2), a bare column (visual_3, also the collision mesh) and the
+# torso housing (visual_5) the shoulders bolt to. Here the robot stands ON the table:
+# the base block is moved up so its foot sits on the table top and the column is
+# scaled along z to run from the raised base to the (unmoved) torso, so the arms'
+# reach is unchanged.
+PEDESTAL_BASE_GEOMS = ("openarm_body_link0_visual_0", "openarm_body_link0_visual_1",
+                       "openarm_body_link0_visual_2", "openarm_body_link0_visual_4")
+PEDESTAL_COLUMN_MESH = "body_link0_3.obj"
+PEDESTAL_COLUMN_Z = (0.008, 0.758)     # column mesh extent in the pedestal frame (metres)
+PEDESTAL_BASE_HEIGHT = 0.221
 # Flange -> Inspire hand base transform, derived from the two frames rather than tuned:
 #
-#   OpenArm v2 ee_base_link: the tool axis is -z (the chain runs 0 0 -L, the stock
-#   gripper fingers sit at z=-0.068); link6's collision shell ends at z=-0.0285.
-#   Inspire RH56 base frame:  +z = fingers forward, +x = palm side (fingers curl
-#   toward +x), y across the palm (right hand: index/thumb at +y, pinky at -y).
+#   OpenArm v1 link7: the tool axis is +z (the chain runs along +z, the stock gripper's
+#   hand body starts at z=FLANGE_Z=0.0955 where link7's mesh ends). With the arm hanging
+#   at rest link7's axes are x = world forward, y = world -y, z = world down.
+#   Inspire RH56 base frame: +z = fingers forward, +x = palm side (fingers curl toward
+#   +x), y across the palm (right hand: index/thumb at +y, pinky at -y).
 #
-# The hand therefore continues the forearm: hand +z -> flange -z, and the palm faces
-# the robot's midline with the thumb forward when the arm hangs at rest (right hand:
-# palm +y, thumb +x; left hand mirrored). Both are 180-degree rotations, about
-# (1,1,0)/sqrt2 for the right and (1,-1,0)/sqrt2 for the left. The base sits just past
-# link6's shell with a 1cm adapter plate in between (HAND_ADAPTER_THICKNESS).
-#
-# The earlier transform (180 degrees about (1,0,-1)) sent hand +z to flange -x, i.e.
-# the fingers stuck out sideways at 80 degrees to the forearm, which is what made the
-# hand look bolted on wrong and bent the wrist joints to compensate.
-LINK6_SHELL_END = -0.0285
+# The hand therefore continues the forearm (hand +z -> link7 +z) and the palm faces the
+# robot's midline with the thumb forward when the arm hangs at rest: right hand palm
+# -> world +y = link7 -y, i.e. a -90 degree turn about z; left hand mirrored (+90).
+# The base sits on the flange face with a 1cm adapter plate in between.
 HAND_ADAPTER_THICKNESS = 0.010
-HAND_MOUNT_Z = LINK6_SHELL_END - HAND_ADAPTER_THICKNESS
+HAND_MOUNT_Z = FLANGE_Z + HAND_ADAPTER_THICKNESS
 MOUNTS = {
-    "right": ((0.0, 0.0, HAND_MOUNT_Z), (0.0, 0.70710678, 0.70710678, 0.0)),
-    "left": ((0.0, 0.0, HAND_MOUNT_Z), (0.0, 0.70710678, -0.70710678, 0.0)),
+    "right": ((0.0, 0.0, HAND_MOUNT_Z), (0.70710678, 0.0, 0.0, -0.70710678)),
+    "left": ((0.0, 0.0, HAND_MOUNT_Z), (0.70710678, 0.0, 0.0, 0.70710678)),
 }
 
 
-def _read_binary_stl(path: Path) -> np.ndarray:
-    raw = path.read_bytes()
-    count = int.from_bytes(raw[80:84], "little")
-    if len(raw) != 84 + 50 * count:
-        raise ValueError(f"{path} is not a binary STL")
-    records = np.frombuffer(raw[84:], dtype=np.dtype([("n", "<3f4"), ("v", "<9f4"), ("attr", "<u2")]))
-    return records["v"].reshape(-1, 3, 3).astype(np.float32).copy()
-
-
-def _write_binary_stl(path: Path, triangles: np.ndarray) -> None:
-    records = np.zeros(len(triangles), dtype=np.dtype([("n", "<3f4"), ("v", "<9f4"), ("attr", "<u2")]))
-    a, b, c = triangles[:, 0], triangles[:, 1], triangles[:, 2]
-    normals = np.cross(b - a, c - a)
-    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-12)
-    records["n"] = normals
-    records["v"] = triangles.reshape(-1, 9)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(bytes(80) + len(triangles).to_bytes(4, "little") + records.tobytes())
-
-
 def _pedestal_on_table(arm: mujoco.MjSpec) -> None:
-    """Rewrite the pedestal meshes so the base block sits on the table top.
+    """Put the pedestal's base block on the table top and stretch the column to meet it.
 
-    The STL is in millimetres with the foot at z=0 (world z = 0.001*z + geom z). The
-    generated files are cached in assets/openarm and regenerated when missing.
+    Everything here is in the pedestal body's frame (world z minus PEDESTAL_RAISE).
+    The base block foot is at z=0; it goes to TABLE_TOP_Z - PEDESTAL_RAISE. The column
+    is a straight extrusion, so scaling its mesh along z is exact.
     """
-    for mesh_name, geom_name in (("body_link0", "openarm_body_link0_visual"), ("body_link0_symp", "openarm_body_link0_collision")):
-        mesh = arm.mesh(mesh_name)
-        source = Path(arm.modelfiledir) / arm.meshdir / mesh.file if not Path(mesh.file).is_absolute() else Path(mesh.file)
-        target = PEDESTAL_ASSET_DIR / f"{mesh_name}_on_table.stl"
-        if not target.is_file() or target.stat().st_mtime < source.stat().st_mtime:
-            triangles = _read_binary_stl(source)
-            geom_z = float(np.asarray(arm.geom(geom_name).pos)[2])
-            world_z = triangles[:, :, 2] * 0.001 + geom_z
-            triangles[:, :, 2] += np.where(world_z < PEDESTAL_CUT_Z, PEDESTAL_BASE_LIFT * 1000.0, 0.0).astype(np.float32)
-            _write_binary_stl(target, triangles)
-        mesh.file = str(target)
+    lift = TABLE_TOP_Z - PEDESTAL_RAISE
+    for name in PEDESTAL_BASE_GEOMS:
+        geom = arm.geom(name)
+        geom.pos = np.asarray(geom.pos) + [0.0, 0.0, lift]
+    bottom, top = PEDESTAL_COLUMN_Z
+    new_bottom = lift + PEDESTAL_BASE_HEIGHT - 0.02  # start inside the base block's top
+    scale_z = (top - new_bottom) / (top - bottom)
+    mesh = arm.mesh(PEDESTAL_COLUMN_MESH)
+    mesh.scale = [mesh.scale[0], mesh.scale[1], mesh.scale[2] * scale_z]
+    for name in ("openarm_body_link0_visual_3", "openarm_body_link0_collision"):
+        geom = arm.geom(name)
+        geom.pos = np.asarray(geom.pos) + [0.0, 0.0, new_bottom - bottom * scale_z]
 
 
 def _attach_hand(arm: mujoco.MjSpec, side: str) -> None:
@@ -134,31 +109,47 @@ def _attach_hand(arm: mujoco.MjSpec, side: str) -> None:
     root.pos = np.zeros(3)
     root.quat = np.array([1.0, 0.0, 0.0, 0.0])
     position, quaternion = MOUNTS[side]
-    flange = arm.body(f"openarm_{side}_ee_base_link")
+    flange = arm.body(f"openarm_{side}_link7")
     mount = flange.add_frame(pos=position, quat=quaternion)
     mount.attach_body(root, prefix=f"{HAND_PREFIX}{side}_")
-    # Visual adapter plate between link6's shell and the hand base (no collision).
+    # Visual adapter plate between the flange face and the hand base (no collision).
     flange.add_geom(
         name=f"{HAND_PREFIX}{side}_adapter",
         type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-        pos=[0.0, 0.0, LINK6_SHELL_END - 0.5 * HAND_ADAPTER_THICKNESS],
+        pos=[0.0, 0.0, FLANGE_Z + 0.5 * HAND_ADAPTER_THICKNESS],
         size=[0.028, 0.5 * HAND_ADAPTER_THICKNESS, 0.0],
         rgba=[0.75, 0.75, 0.78, 1.0],
         contype=0,
         conaffinity=0,
     )
 
-    # Remove the bulky stock gripper-base and camera casing from the wrist
-    # so the Inspire hand connects cleanly and directly to the forearm link.
-    for geom_name in (
-        f"ee_base_link_{side}_00",
-        f"ee_base_link_{side}_01",
-        f"ee_base_link_{side}_02",
-        f"ee_base_link_{side}_collision_00",
-    ):
-        geom = arm.geom(geom_name)
-        if geom is not None:
-            arm.delete(geom)
+
+def _remove_stock_gripper(arm: mujoco.MjSpec, side: str) -> None:
+    """Drop v1's parallel gripper (link8 -> hand -> two finger slides) and its actuators."""
+    for name in (f"{side}_finger1_ctrl", f"{side}_finger2_ctrl"):
+        actuator = arm.actuator(name)
+        if actuator is not None:
+            arm.delete(actuator)
+    # The unnamed finger-coupling equality, the split tendon and the hand/finger
+    # contact excludes all reference joints/bodies that are about to go.
+    finger_joints = {f"openarm_{side}_finger_joint1", f"openarm_{side}_finger_joint2"}
+    for equality in list(arm.equalities):
+        if equality.name1 in finger_joints or equality.name2 in finger_joints:
+            arm.delete(equality)
+    tendon = arm.tendon(f"split_{side}")
+    if tendon is not None:
+        arm.delete(tendon)
+    gripper_bodies = {f"openarm_{side}_hand", f"openarm_{side}_right_finger", f"openarm_{side}_left_finger"}
+    for exclude in list(arm.excludes):
+        if exclude.bodyname1 in gripper_bodies or exclude.bodyname2 in gripper_bodies:
+            arm.delete(exclude)
+    for name in (f"openarm_{side}_finger_joint1", f"openarm_{side}_finger_joint2"):
+        joint = arm.joint(name)
+        if joint is not None:
+            arm.delete(joint)
+    gripper = arm.body(f"openarm_{side}_link8")
+    if gripper is not None:
+        arm.delete(gripper)
 
 
 def _camera_quat(eye: np.ndarray, target: np.ndarray, up: np.ndarray = np.array([0.0, 0.0, 1.0])) -> list[float]:
@@ -179,7 +170,18 @@ def build_five_finger_spec(
     if not INSPIRE_ROOT.is_dir():
         raise FileNotFoundError("Inspire RH56DFX assets missing; clone correlllab/rh56_controller with h1_mujoco")
 
-    arm = mujoco.MjSpec.from_file(str(official_model_path()))
+    arm = load_openarm_spec()
+    # v1 ships only the robot on a floor; the workbench is built here. The table body's
+    # origin is at world (0.47, 0, 0.36) with the top face at TABLE_TOP_Z=0.40, the
+    # same layout the v2-based scene had, so every reach analysis carries over.
+    table_body = arm.worldbody.add_body(name="table", pos=[0.47, 0.0, TABLE_TOP_Z - 0.04])
+    table_body.add_geom(
+        name="table_top",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=[0.35, 0.55, 0.04],
+        rgba=[0.96, 0.87, 0.70, 1.0],
+        friction=[1.0, 0.005, 0.0001],
+    )
     arm.worldbody.add_camera(name="overhead", pos=[0.15, 0.0, 2.2], quat=[1, 0, 0, 0], fovy=50)
     arm.worldbody.add_camera(
         name="isometric",
@@ -247,23 +249,22 @@ def build_five_finger_spec(
         size=[0.15, 0.10, 0.04],   # x -0.20 .. 0.10, |y| <= 0.10: just the base block's footprint
         rgba=[0.82, 0.71, 0.55, 1.0],
     )
-    for name in ("openarm_body_link0_visual", "openarm_body_link0_collision"):
-        pedestal = arm.geom(name)
-        pedestal.pos = np.asarray(pedestal.pos) + [0.0, 0.0, PEDESTAL_RAISE]
+    # The pedestal body carries both arms, so raising it raises the shoulders too.
+    pedestal = arm.body("openarm_body_link0")
+    pedestal.pos = np.asarray(pedestal.pos) + [0.0, 0.0, PEDESTAL_RAISE]
     _pedestal_on_table(arm)
     for side in MOUNTS:
-        base = arm.body(f"openarm_{side}_base_link")
-        base.pos = np.asarray(base.pos) + [0.0, 0.0, PEDESTAL_RAISE]
-    for side in MOUNTS:
-        arm.delete(arm.body(f"openarm_{side}_ee_inner_finger"))
-        arm.delete(arm.body(f"openarm_{side}_ee_outer_finger"))
+        _remove_stock_gripper(arm, side)
         _attach_hand(arm, side)
+    # attach_body merges the hand file's actuator defaults over the arm servos; put
+    # the arm's own gains back (see configure_arm_servos).
+    configure_arm_servos(arm)
 
     # Right arm wrist camera (Eye-in-Hand camera): mounted on the right wrist looking down along the fingers
     wrist_cam_pos = np.array([-0.04, -0.02, 0.09])
     wrist_cam_target = np.array([-0.25, -0.02, -0.02])
     wrist_cam_quat = _camera_quat(wrist_cam_pos, wrist_cam_target)
-    arm.body("openarm_right_ee_base_link").add_camera(
+    arm.body("openarm_right_link7").add_camera(
         name="right_wrist_camera",
         pos=wrist_cam_pos.tolist(),
         quat=wrist_cam_quat,
@@ -282,8 +283,6 @@ def build_five_finger_spec(
                 f"YCB mesh asset missing: {mesh_file}  "
                 f"(copy from P-161/objects/ycb/{YCB_PICK_OBJECT_NAME}/)"
             )
-        arm.delete(arm.body("bottle"))
-
         # ── Load mesh with real texture ──────────────────────────────────
         # The soup can's mesh is already centred on its own origin (measured
         # AABB centre is within 0.5 mm of zero), so no refpos correction.

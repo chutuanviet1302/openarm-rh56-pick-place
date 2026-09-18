@@ -1,8 +1,8 @@
 # Báo cáo tiến độ — Project Intern: OpenArm + Inspire Hand + D435, điều khiển qua ROS 2
 
-**Ngày:** 17/09/2026
+**Ngày:** 18/09/2026
 **Repo (private):** https://github.com/chutuanviet1302/openarm-rh56-pick-place
-**Phạm vi đến nay:** mới làm thử toàn bộ pipeline trong **mô phỏng MuJoCo**. Chưa chạy trên robot thật, chưa chạy qua ROS 2 thật.
+**Phạm vi đến nay:** mới làm thử toàn bộ pipeline trong **mô phỏng MuJoCo** (đã chuyển sang **OpenArm v1** sau khi anh xác nhận; MJCF từ `enactic/openarm_mujoco/v1`). Package ROS 2 đã build và chạy được trong Docker (ROS 2 Humble) với message giả — xem `docker/README.md`.
 
 ## 1. Đối chiếu với pipeline anh đề ra
 
@@ -29,15 +29,15 @@ Pipeline: Perception (vision → object position / orientation) → ROS 2 msg �
 - Sim: model RH56DFX, 6 actuator / 12 khớp mỗi tay. Nắm theo cách driver thật: ngón cái đối diện trước, rồi đóng từng ngón từng bước tới khi lực ≥ 8 N. Điều kiện nhấc: cả 5 ngón có lực ≥ 0.5 N.
 - Thật: đã map giá trị sang thang 0–1000 của driver, chưa chạy với tay thật (lab dùng RH56F1, sim là DFX).
 
-**Kết quả sim hiện tại** (bố cục mặc định, có perception): cổ tay gập 4.9° / 0.0° tại grasp; 5 ngón lực 28.7 / 9.8 / 9.0 / 7.7 / 3.4 N; proof-lift trượt 0 mm; đáy lon cao hơn mép rổ 5.7 cm khi mang; đặt sai số 12 mm, nghiêng 0°; tay–rổ xuyên tối đa 0.3 mm. Bố cục ngẫu nhiên + perception: 6/6 đạt. Test tự động: 38/38.
+**Kết quả sim hiện tại — OpenArm v1** (bố cục mặc định, có perception): cổ tay gập 0.0° / 1.8° tại grasp; 5 ngón lực 24.2 / 9.8 / 8.5 / 10.2 N + ngón út sau khi siết thêm; proof-lift trượt 0 mm; đáy lon cao hơn mép rổ 5.4 cm khi mang; lon chạm đáy rổ rồi mới mở tay; đặt sai số 12.5 mm, nghiêng 0°. Bố cục ngẫu nhiên + perception (seed 7): 6/6 đạt, sai số 12–17 mm. Test tự động: 38/38.
 
 ## 2. Đã sửa theo góp ý của anh (mount bàn tay)
 - Lỗi cũ đo được: transform flange → tay đưa trục ngón về −x của flange → ngón lệch 80° so với cẳng tay, cổ tay phải bẻ để bù.
-- Sửa: suy transform từ hai hệ trục (trục dụng cụ OpenArm v2 = −z của `ee_base_link`, khớp `v1/openarm.xml`; Inspire +z = ngón, +x = lòng bàn tay). Tay phải quay 180° quanh (1,1,0)/√2, tay trái quanh (1,−1,0)/√2; đế tay ngay sau vỏ link6 với adapter 1 cm (giả định).
+- Sửa: suy transform từ hai hệ trục (OpenArm v1: trục dụng cụ = +z của `link7`, mặt flange z = 0.0955 nơi gripper gốc bắt vào; Inspire +z = ngón, +x = lòng bàn tay). Tay phải quay −90° quanh z, tay trái +90°; đế tay trên mặt flange với adapter 1 cm (giả định).
 - Kết quả: ngón lệch trục cẳng tay 2.0° (phải) / 2.9° (trái); lòng bàn tay hướng vào thân, ngón cái phía trước. Có test tự động chốt < 5°. Tư thế nắm, tư thế chờ, A/B đều suy lại từ mount mới.
 
 ## 3. Khó khăn / quyết định tự đưa ra trong sim
-- Rổ phải đổi 16 cm → 24 cm: bật collision lòng bàn tay thì đo được mặt dưới tay chỉ cao hơn đáy lon 3 cm ở 8 cm sau lon; thành rổ 5 cm phải cách tâm lon ≥ 12 cm thì lon mới chạm đáy.
+- Rổ phải đổi 16 cm → 32 cm: bật collision lòng bàn tay thì đo được mặt dưới tay (v1) chỉ cao hơn đáy lon 3.7 cm ở 12 cm sau lon, 5.6–6.2 cm ở 14–16 cm; thành rổ 5 cm phải cách tâm lon ≥ 14–16 cm thì lon mới chạm đáy mà lòng bàn tay không tì lên mép.
 - Vùng với của tư thế cổ-tay-thẳng hẹp (A trong x 0.36–0.44, y −0.32…−0.22) vì vai OpenArm cao so với bàn; phía đặt cho xoay tay quanh trục đứng để rổ nằm trong vùng với.
 - Servo sag: lệnh nâng 5 cm chỉ lên 4.1–4.3 cm → tiêu chí proof-lift đổi thành trượt tay–vật ≤ 1 cm.
 - Thả vật: mở tay khi lon còn lơ lửng thì ngón cái bẩy lon rơi lệch 3 cm → hạ tới khi lon chạm đáy mới mở, và lập lại kế hoạch đặt từ offset thật của lon trong tay.
@@ -51,7 +51,7 @@ Pipeline: Perception (vision → object position / orientation) → ROS 2 msg �
 
 ## 5. Câu hỏi xin anh góp ý
 1. **Adapter flange → đế tay và model tay:** lab có CAD / số đo thật của adapter RH56F1 lên OpenArm không, hướng lắp (lòng bàn tay vào thân, ngón cái phía trước) có đúng không? RH56F1 có khác RH56DFX về hình học / khớp không, lab có URDF hoặc MJCF của F1 không?
-2. **Phần cứng thật để set tham số sim cho khớp:** D435 gắn ở đâu, kích thước rổ, chiều cao bàn, đế robot đặt trên bàn hay bệ riêng? (Sim hiện: rổ 24 cm thành 5 cm; vai ở z = 0.798 m.)
+2. **Phần cứng thật để set tham số sim cho khớp:** D435 gắn ở đâu, kích thước rổ, chiều cao bàn, đế robot đặt trên bàn hay bệ riêng? (Sim hiện: rổ 32 cm thành 5 cm; vai ở z = 0.798 m; giới hạn lực servo sim ±120 N, gấp 3 motor thật.)
 3. **Bước tiếp theo nên ưu tiên:** (a) chuyển pipeline sim sang chạy qua ROS 2 msg thật (perception node → motion node) ngay trong sim, (b) thu dataset demo hàng loạt, hay (c) nối phần cứng (D435 → MoveIt → ros2_control → rh56 driver)?
 
 ## 6. Kế hoạch đề xuất

@@ -30,18 +30,19 @@ WRIST_BEND_INDICES = (5, 6)
 # --------------------------------------------------------------------------- posture
 # Reference grasp posture for the right arm with the wrist *straight* (joint6 = joint7
 # = 0), so hand and forearm form one line the way a person's do when picking a bottle
-# up from the side. Found by sweeping straight-wrist configurations for one whose jaw
-# lands on the table at can-waist height with the fingers near horizontal. The grasp
-# orientation and the default pick point A are both derived from it by forward
-# kinematics. With the hand mounted along the flange axis (five_finger_model.MOUNTS), this posture
-# reaches forward over the table with the palm facing the midline, fingers pointing
-# +x and tilted 22 degrees down, wrist bend 1.8 / -0.6 degrees.
-NATURAL_GRASP_JOINTS = np.array([-0.041, 0.331, 0.14, 1.214, 0.314, 0.032, -0.011])
+# up from the side. Found with scripts/sweep_postures.py (re-run it whenever the arm
+# model or the hand mount changes): the jaw lands on the table at can-waist height with
+# the fingers near horizontal. The grasp orientation and the default pick point A are
+# both derived from it by forward kinematics, so they cannot drift apart.
+# OpenArm v1, hand along link7's +z: reaches forward over the table, palm toward the
+# midline, fingers forward/outward and 14 degrees down, wrist bend -0.5 / +3.3 degrees.
+NATURAL_GRASP_JOINTS = np.array([-0.14, 0.041, 0.44, 1.373, 0.211, -0.008, 0.058])
 RIGHT_SEED = NATURAL_GRASP_JOINTS
 # Symmetric attention stance; the left arm mirrors the right (see Scene.attention_pose).
-# Fists held in front of the body over the table (elbow ~108 degrees), fingers forward,
-# palms facing each other, ~13cm above the table, wrist straight.
-ATTENTION_RIGHT = np.array([-0.383, 0.726, 0.051, 1.893, 0.108, 0.0, 0.0])
+# Fists held in front of the body over the table (elbow ~125 degrees), fingers straight
+# forward, palms facing each other, ~14cm above the table, wrist straight
+# (scripts/sweep_postures.py, OpenArm v1).
+ATTENTION_RIGHT = np.array([-0.886, 0.547, 0.464, 2.177, -0.083, 0.0, 0.0])
 
 # --------------------------------------------------------------------------- IK
 IK_MAX_ITERATIONS = 6000
@@ -124,8 +125,8 @@ BASKET_CONTACT_TOLERANCE = 0.003  # same graze allowance as the table
 # --------------------------------------------------------------------------- randomization
 # Sampling boxes (table-plane x, y) covering the region the straight-wrist grasp reaches.
 # Every sample is still verified by IK before physics runs (demo.sample_layout).
-RANDOM_PICK_BOX = ((0.36, 0.44), (-0.32, -0.22))
-RANDOM_BASKET_BOX = ((0.34, 0.46), (-0.03, 0.05))
+RANDOM_PICK_BOX = ((0.38, 0.46), (-0.38, -0.28))
+RANDOM_BASKET_BOX = ((0.36, 0.46), (-0.06, 0.06))
 MIN_PICK_TO_BASKET_M = 0.15
 # The wrapped hand reaches ~8cm beyond the can's surface, so the basket's nearest wall
 # must stay this far from the object's centre or the thumb clips it at grasp.

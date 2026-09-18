@@ -214,12 +214,43 @@ class GraspPlanner:
             except RuntimeError as error:
                 failures.append(f"yaw {yaw:+.0f}: {error}")
                 continue
+            # IK reachability is not enough: with the hand turned, its palm can land on
+            # the basket wall at the set-down pose (seen at yaw +60 on OpenArm v1).
+            # Reject a yaw whose lowered hand intersects the basket.
+            hits = self.hand_basket_contacts(lower_path[-1])
+            if hits:
+                failures.append(f"yaw {yaw:+.0f}: hand would hit the basket at set-down ({', '.join(sorted(hits))})")
+                continue
             joints["transfer"], joints["lower"] = transfer_path[-1], lower_path[-1]
             plan.paths = {"transfer": transfer_path, "lower": lower_path}
             plan.centers = centers_yaw
             plan.place_yaw_deg = yaw
             return plan
         raise RuntimeError("no reachable transfer/set-down pose at any hand yaw:\n  " + "\n  ".join(failures))
+
+    def hand_basket_contacts(self, arm_joints: np.ndarray) -> set[str]:
+        """Hand bodies that intersect the basket when the right arm is at `arm_joints`
+        with the hand pre-shaped, evaluated by MuJoCo's own collision detection on a
+        throwaway MjData (no physics stepping)."""
+        scene, model = self.scene, self.model
+        data = mujoco.MjData(model)
+        data.qpos[:] = scene.data.qpos
+        data.qpos[scene.arm_qpos["right"]] = arm_joints
+        for name, actuator in scene.finger_actuator["right"].items():
+            joint = model.actuator_trnid[actuator, 0]
+            opened, closed = scene.open_ctrl["right"][name], scene.closed_ctrl["right"][name]
+            data.qpos[model.jnt_qposadr[joint]] = opened + C.GRASP_CLOSURE_FRACTION * (closed - opened)
+        yaw_actuator, _, opposed = scene.thumb_yaw["right"]
+        data.qpos[model.jnt_qposadr[model.actuator_trnid[yaw_actuator, 0]]] = opposed
+        mujoco.mj_forward(model, data)
+        hits: set[str] = set()
+        for contact in data.contact[: data.ncon]:
+            if contact.geom1 not in scene.basket_geoms and contact.geom2 not in scene.basket_geoms:
+                continue
+            other = contact.geom2 if contact.geom1 in scene.basket_geoms else contact.geom1
+            if scene.hand_side(other) == "right" and float(contact.dist) < 0.0:
+                hits.add(model.body(int(model.geom_bodyid[other])).name)
+        return hits
 
     # ------------------------------------------------------------------ debugging
     def describe(self, plan: Plan) -> str:

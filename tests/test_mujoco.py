@@ -16,7 +16,8 @@ class MujocoSmokeTests(unittest.TestCase):
 
     def test_official_scene_exists_and_loads(self):
         self.assertTrue(official_model_path().is_file())
-        self.assertEqual(self.robot.model.nu, 16)
+        # OpenArm v1 bimanual: 7 + 7 arm servos and 2 + 2 stock gripper fingers.
+        self.assertEqual(self.robot.model.nu, 18)
 
     def test_required_left_arm_controls_exist(self):
         for name in LEFT_ARM_ACTUATORS:
@@ -113,20 +114,22 @@ class MujocoSmokeTests(unittest.TestCase):
 
     def test_hands_continue_the_forearm_axis(self):
         """The Inspire hand is bolted to the flange along the tool axis: its fingers
-        point the way the forearm points (within a few degrees), the base sits just
-        past link6's shell on the flange axis, and the palm faces the robot's midline
-        with the arm hanging at rest."""
+        point the way the forearm points (within a few degrees), the base sits on
+        link7's flange face (+z, OpenArm v1) plus the adapter, and the palm faces the
+        robot's midline with the arm hanging at rest."""
         from simulation.five_finger_model import HAND_MOUNT_Z
 
         model = build_five_finger_model(pick_bottle=True)
         data = mujoco.MjData(model)
         mujoco.mj_forward(model, data)  # all joints zero: arms hang straight down
         for side, inward in (("right", +1.0), ("left", -1.0)):
-            flange = model.body(f"openarm_{side}_ee_base_link").id
+            flange = model.body(f"openarm_{side}_link7").id
             hand = model.body(f"inspire_{side}_base").id
+            # Forearm axis = link5 origin -> link7 origin (v1's link6 is offset sideways
+            # by the wrist gimbal, so link5 -> link6 is not the forearm direction).
             link5 = data.xpos[model.body(f"openarm_{side}_link5").id]
-            link6 = data.xpos[model.body(f"openarm_{side}_link6").id]
-            forearm = (link6 - link5) / np.linalg.norm(link6 - link5)
+            link7 = data.xpos[flange]
+            forearm = (link7 - link5) / np.linalg.norm(link7 - link5)
             tips = np.mean(
                 [data.site_xpos[model.site(f"inspire_{side}_{side}_{f}_tip").id] for f in ("index", "middle", "ring", "pinky")],
                 axis=0,
@@ -135,7 +138,7 @@ class MujocoSmokeTests(unittest.TestCase):
             fingers /= np.linalg.norm(fingers)
             angle = np.degrees(np.arccos(np.clip(forearm @ fingers, -1.0, 1.0)))
             self.assertLess(angle, 5.0, f"{side} fingers are {angle:.1f} degrees off the forearm axis")
-            # Base on the flange axis, HAND_MOUNT_Z along the flange's -z (here world -z).
+            # Base on the flange axis, HAND_MOUNT_Z along link7's +z (world down at rest).
             offset = data.xmat[flange].reshape(3, 3).T @ (data.xpos[hand] - data.xpos[flange])
             np.testing.assert_allclose(offset, [0.0, 0.0, HAND_MOUNT_Z], atol=1e-6)
             palm_normal = data.xmat[hand].reshape(3, 3)[:, 0]
@@ -174,7 +177,9 @@ class MujocoSmokeTests(unittest.TestCase):
         table = model.geom("table_top")
         table_center = model.body(table.bodyid[0]).pos + table.pos
         self.assertGreaterEqual(table_center[0] - table.size[0], 0.12)
-        self.assertGreater(model.body("openarm_left_base_link").pos[2], 0.40)
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        self.assertGreater(float(data.xpos[model.body("openarm_left_link0").id][2]), 0.40)
         self.assertEqual(model.joint("pick_bottle_joint").type[0], mujoco.mjtJoint.mjJNT_FREE)
         self.assertEqual(model.geom("ycb_mustard_bottle_visual").type[0], mujoco.mjtGeom.mjGEOM_MESH)
 
