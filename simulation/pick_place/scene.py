@@ -23,7 +23,7 @@ from simulation.pick_place.config import (
     OBJECT_GEOM,
     TABLE_CONTACT_TOLERANCE,
 )
-from simulation.pick_place.kinematics import hand_pose, natural_grasp_frame
+from simulation.pick_place.kinematics import wrist_frame, hand_pose, natural_grasp_frame
 
 
 class Scene:
@@ -44,7 +44,7 @@ class Scene:
         self.bottle_dof = int(self.model.joint(BOTTLE_JOINT).dofadr[0])
         self.bottle_body = self.model.body("pick_bottle").id
         self.object_geom = self.model.geom(OBJECT_GEOM).id
-        self.table_geom = self.model.geom("table_top").id
+        self.table_geoms = {self.model.geom("table_top").id}
         self.basket_geoms = {
             self.model.geom(f"place_basket_{name}").id for name in ("bottom", "left", "right", "front", "back")
         }
@@ -170,6 +170,22 @@ class Scene:
     def wrist_rotation(self, side: str) -> np.ndarray:
         return self.data.site_xmat[self.ee_site_id[side]].reshape(3, 3).copy()
 
+    def hand_ctrl(self, side: str, open_fingers: tuple[str, ...] = (), thumb_opposed: bool = True) -> np.ndarray:
+        """Hand ctrl vector: a fist with the named fingers uncurled; the thumb yaw stays
+        opposed unless `thumb_opposed` is False."""
+        ctrl = self.closed_hand[side].copy()
+        actuators = list(self.hand_actuators[side])
+        for name in open_fingers:
+            ctrl[actuators.index(self.finger_actuator[side][name])] = self.open_ctrl[side][name]
+        yaw_actuator, unopposed, opposed = self.thumb_yaw[side]
+        ctrl[actuators.index(yaw_actuator)] = opposed if thumb_opposed else unopposed
+        return ctrl
+
+    def wrist_position_at(self, side: str, joints: np.ndarray) -> np.ndarray:
+        """Wrist position for an arm joint vector, by FK on a throwaway MjData."""
+        position, _ = wrist_frame(self.model, side, np.asarray(joints, dtype=float))
+        return position
+
     # ------------------------------------------------------------------ contacts
     def hand_side(self, geom: int) -> str | None:
         body = int(self.model.geom_bodyid[geom])
@@ -212,9 +228,9 @@ class Scene:
             offenders[body] = min(offenders.get(body, 0.0), float(contact.dist) * 1000.0)
         return offenders
 
-    def table_contacts(self) -> dict[str, float]:
-        """Which arm/hand parts are inside the table, and how deep (mm)."""
-        return self._penetrations({self.table_geom}, TABLE_CONTACT_TOLERANCE)
+    def support_contacts(self) -> dict[str, float]:
+        """Which arm/hand parts penetrate the floor, and how deep (mm)."""
+        return self._penetrations(self.table_geoms, TABLE_CONTACT_TOLERANCE)
 
     def basket_contacts(self) -> dict[str, float]:
         """Which arm/hand parts are colliding with the basket, and how deep (mm)."""

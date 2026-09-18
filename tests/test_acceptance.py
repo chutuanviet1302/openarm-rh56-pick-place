@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 import numpy as np
 
-from simulation.pick_place_demo import Demo, upright_tilt_degrees
+from simulation.pick_place_demo import Demo, run_trial, sample_layout, upright_tilt_degrees
 
 
 class AcceptanceTests(unittest.TestCase):
@@ -26,29 +26,25 @@ class AcceptanceTests(unittest.TestCase):
         self.assertLessEqual(tilt, 15.0, f"Final tilt {tilt:.1f} deg exceeds 15 deg")
 
     def test_twenty_trials_acceptance(self):
-        """Phase 5.2: Verify >= 18/20 trials succeed without failure or weld."""
+        """At least 19/20 randomized RGB-D trials meet the physical metrics."""
         passed = 0
         total = 20
         errors = []
 
+        rng = np.random.default_rng(7)
         for trial in range(total):
-            demo = Demo()
+            demo = Demo(**sample_layout(rng, perception=True), perception=True)
             try:
-                demo.run()
-                final_pos = demo.data.qpos[demo.bottle_qpos : demo.bottle_qpos + 3]
-                basket_pos = demo.data.geom_xpos[demo.model.geom("place_basket_bottom").id]
-                placement_error = float(np.linalg.norm(final_pos[:2] - basket_pos[:2]))
-                tilt = upright_tilt_degrees(demo.data.qpos[demo.bottle_qpos + 3 : demo.bottle_qpos + 7])
-
-                if placement_error <= 0.020 and tilt <= 15.0:
+                result = run_trial(demo)
+                if result.success:
                     passed += 1
                 else:
-                    errors.append(f"Trial {trial}: err={placement_error*1000:.1f}mm, tilt={tilt:.1f}deg")
+                    errors.append(f"Trial {trial}: {result.failure_reason}")
             except Exception as e:
                 errors.append(f"Trial {trial}: {e}")
 
         self.assertGreaterEqual(
-            passed, 18, f"Pass rate {passed}/{total} below 18/20 threshold. Failures: {errors}"
+            passed, 19, f"Pass rate {passed}/{total} below 19/20 threshold. Failures: {errors}"
         )
 
 

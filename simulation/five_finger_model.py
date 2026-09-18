@@ -22,39 +22,48 @@ OBJECT_HALF_HEIGHT = 0.05  # collision cylinder half-height (mesh ≈ 5.09 cm)
 # Distance from the mesh origin down to its bottom face; the visual is raised by the
 # difference so the drawn bottom coincides with the collision bottom on the table.
 MESH_HALF_HEIGHT_BELOW = 0.0516
-TABLE_TOP_Z = 0.40
+# World frame: origin on the table top under the robot. The robot stands ON the table
+# (stock OpenArm v1 pedestal on its base plate), the object and basket share the top,
+# and the room floor is one table height below. Lab measurements, 2026-09-18.
+TABLE_TOP_Z = 0.0
+TABLE_HEIGHT_ABOVE_FLOOR = 0.74     # measured table height
+ROOM_FLOOR_Z = TABLE_TOP_Z - TABLE_HEIGHT_ABOVE_FLOOR
+TABLE_X_RANGE = (-0.25, 0.75)       # runs from behind the pedestal to the far edge
+TABLE_HALF_WIDTH = 0.55
+TABLE_THICKNESS = 0.04
+ROBOT_RISER_HEIGHT = 0.02901        # measured base plate under the pedestal
+SHOULDER_AXIS_ABOVE_RISER = 0.698   # vendor OpenArm v1 model: body_link0 -> shoulder axis
+SHOULDER_AXIS_Z = TABLE_TOP_Z + ROBOT_RISER_HEIGHT + SHOULDER_AXIS_ABOVE_RISER
+CAMERA_ABOVE_SHOULDER_AXIS = 0.06864  # measured: D435i optical centre above the shoulder axis
+# The vendor v1 torso housing rises 0.083 above the shoulder axis, so the measured
+# 0.0686 would put the camera inside the mesh. Until the head is re-measured the sim
+# mounts the camera flat on top of the housing (its top face + half the D435 body).
+HEAD_TOP_ABOVE_SHOULDER_AXIS = 0.083
+CAMERA_BODY_HALF_HEIGHT = 0.0125
+HEAD_FRONT_X = 0.066                # vendor torso housing front face (pedestal frame)
+CAMERA_Z = SHOULDER_AXIS_Z + max(CAMERA_ABOVE_SHOULDER_AXIS, HEAD_TOP_ABOVE_SHOULDER_AXIS + CAMERA_BODY_HALF_HEIGHT)
 HAND_PREFIX = "inspire_"
-# Default pick point A and basket point B (table-plane x, y). A is where a straight
-# wrist (see pick_place_demo.NATURAL_GRASP_JOINTS) puts the hand's jaw; B is the
-# nearest spot 15cm+ away that the same orientation still reaches. Both can be
-# overridden per run (`pick_place_demo --object X Y --basket X Y`).
-PICK_POSITION_A = (0.421, -0.332)
-BASKET_POSITION_B = (0.42, -0.04)
-BASKET_FLOOR_Z = 0.405
-# Basket inner half-width and wall height. Sized for the hand, not the can: with a
-# horizontal side grasp the palm's underside is only 3cm above the can's bottom at
-# 8cm behind the can and ~7-10cm at 12cm behind it (measured hand profile), so a wall
-# 5cm tall must be at least 12cm from the can's centre for the can to reach the floor
-# without the palm resting on the rim. A 16cm basket left the palm sitting on the wall.
-BASKET_HALF_WIDTH = 0.16
+# Default pick point A and basket point B (table-plane x, y). A is out on the robot's
+# right, B is at the table's centre line to A's left, 33cm away -- the far side of the
+# right arm's reach (it cannot place past y ~ -0.04; the robot's left half of the table
+# belongs to the left arm). The top grasp comes in at whatever heading the planner's
+# grasp-yaw candidates reach. Both can be overridden per run
+# (`pick_place_demo --object X Y --basket X Y`).
+PICK_POSITION_A = (0.14, -0.36)
+BASKET_POSITION_B = (0.24, -0.04)
+BASKET_FLOOR_Z = TABLE_TOP_Z + 0.005
+# Basket inner half-width and wall height. With the top grasp the hand comes down
+# onto the can from above, so the basket only has to clear the can plus the fingers
+# wrapped around it: 18cm inside. (The old 32cm basket was sized for a horizontal
+# side grasp, whose palm reached 12cm behind the can; at 32cm it also ran into the
+# pedestal's base plate, which spans x -0.16..0.10, y -0.10..0.10.) Position B is the
+# nearest spot the lift pose still reaches (scripts/sweep_floor_layout.py: x <= 0.30)
+# that keeps the basket clear of the base plate and the pick point outside its walls.
+BASKET_HALF_WIDTH = 0.09
 BASKET_WALL_HEIGHT = 0.05
 BASKET_WALL_THICKNESS = 0.01
-# How far the whole robot (pedestal + both shoulders) is raised above the v1 model's
-# origin. v1 puts the shoulders at z=0.698 on the floor; with the table top at 0.40
-# that is only 0.30 above the work surface. 0.10 puts them at 0.798, the height every
-# reach analysis in this project was done at (the v2 setup used the same value).
-PEDESTAL_RAISE = 0.10
-# The stock v1 pedestal is a floor-standing unit: a 22cm base block (visual_1/_4 plus
-# two small plates _0/_2), a bare column (visual_3, also the collision mesh) and the
-# torso housing (visual_5) the shoulders bolt to. Here the robot stands ON the table:
-# the base block is moved up so its foot sits on the table top and the column is
-# scaled along z to run from the raised base to the (unmoved) torso, so the arms'
-# reach is unchanged.
-PEDESTAL_BASE_GEOMS = ("openarm_body_link0_visual_0", "openarm_body_link0_visual_1",
-                       "openarm_body_link0_visual_2", "openarm_body_link0_visual_4")
-PEDESTAL_COLUMN_MESH = "body_link0_3.obj"
-PEDESTAL_COLUMN_Z = (0.008, 0.758)     # column mesh extent in the pedestal frame (metres)
-PEDESTAL_BASE_HEIGHT = 0.221
+# The stock floor-standing pedestal is placed on the measured base plate.
+PEDESTAL_RAISE = ROBOT_RISER_HEIGHT
 # Flange -> Inspire hand base transform, derived from the two frames rather than tuned:
 #
 #   OpenArm v1 link7: the tool axis is +z (the chain runs along +z, the stock gripper's
@@ -73,27 +82,6 @@ MOUNTS = {
     "right": ((0.0, 0.0, HAND_MOUNT_Z), (0.70710678, 0.0, 0.0, -0.70710678)),
     "left": ((0.0, 0.0, HAND_MOUNT_Z), (0.70710678, 0.0, 0.0, 0.70710678)),
 }
-
-
-def _pedestal_on_table(arm: mujoco.MjSpec) -> None:
-    """Put the pedestal's base block on the table top and stretch the column to meet it.
-
-    Everything here is in the pedestal body's frame (world z minus PEDESTAL_RAISE).
-    The base block foot is at z=0; it goes to TABLE_TOP_Z - PEDESTAL_RAISE. The column
-    is a straight extrusion, so scaling its mesh along z is exact.
-    """
-    lift = TABLE_TOP_Z - PEDESTAL_RAISE
-    for name in PEDESTAL_BASE_GEOMS:
-        geom = arm.geom(name)
-        geom.pos = np.asarray(geom.pos) + [0.0, 0.0, lift]
-    bottom, top = PEDESTAL_COLUMN_Z
-    new_bottom = lift + PEDESTAL_BASE_HEIGHT - 0.02  # start inside the base block's top
-    scale_z = (top - new_bottom) / (top - bottom)
-    mesh = arm.mesh(PEDESTAL_COLUMN_MESH)
-    mesh.scale = [mesh.scale[0], mesh.scale[1], mesh.scale[2] * scale_z]
-    for name in ("openarm_body_link0_visual_3", "openarm_body_link0_collision"):
-        geom = arm.geom(name)
-        geom.pos = np.asarray(geom.pos) + [0.0, 0.0, new_bottom - bottom * scale_z]
 
 
 def _attach_hand(arm: mujoco.MjSpec, side: str) -> None:
@@ -171,88 +159,105 @@ def build_five_finger_spec(
         raise FileNotFoundError("Inspire RH56DFX assets missing; clone correlllab/rh56_controller with h1_mujoco")
 
     arm = load_openarm_spec()
-    # v1 ships only the robot on a floor; the workbench is built here. The table body's
-    # origin is at world (0.47, 0, 0.36) with the top face at TABLE_TOP_Z=0.40, the
-    # same layout the v2-based scene had, so every reach analysis carries over.
-    table_body = arm.worldbody.add_body(name="table", pos=[0.47, 0.0, TABLE_TOP_Z - 0.04])
-    table_body.add_geom(
+    # The vendor scene's ground plane becomes the room floor; the table stands on it.
+    arm.geom("floor").pos = [0.0, 0.0, ROOM_FLOOR_Z]
+    table_x = 0.5 * (TABLE_X_RANGE[0] + TABLE_X_RANGE[1])
+    table_half_x = 0.5 * (TABLE_X_RANGE[1] - TABLE_X_RANGE[0])
+    # The top is drawn as a slab but collides as a plane: MuJoCo's cylinder-box contact
+    # (convex MPR) gives the can a wobblier footing than cylinder-plane, enough to
+    # turn a clean proof lift (0mm slip) into a 5mm-slip / 18-degree-tilt failure.
+    # Nothing in the workspace reaches past the table's edges, so the infinite plane
+    # is equivalent there.
+    arm.worldbody.add_geom(
         name="table_top",
+        type=mujoco.mjtGeom.mjGEOM_PLANE,
+        pos=[table_x, 0.0, TABLE_TOP_Z],
+        size=[table_half_x, TABLE_HALF_WIDTH, 0.05],
+        rgba=[0.0, 0.0, 0.0, 0.0],
+        friction=[1.0, 0.005, 0.0001],
+    )
+    arm.worldbody.add_geom(
+        name="table_top_visual",
         type=mujoco.mjtGeom.mjGEOM_BOX,
-        size=[0.35, 0.55, 0.04],
+        pos=[table_x, 0.0, TABLE_TOP_Z - 0.5 * TABLE_THICKNESS],
+        size=[table_half_x, TABLE_HALF_WIDTH, 0.5 * TABLE_THICKNESS],
         rgba=[0.96, 0.87, 0.70, 1.0],
+        contype=0,
+        conaffinity=0,
+    )
+    leg_half_height = 0.5 * (TABLE_HEIGHT_ABOVE_FLOOR - TABLE_THICKNESS)
+    for i, (sx, sy) in enumerate(((-1, -1), (-1, 1), (1, -1), (1, 1))):
+        arm.worldbody.add_geom(
+            name=f"table_leg_{i}",
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            pos=[table_x + sx * (table_half_x - 0.04), sy * (TABLE_HALF_WIDTH - 0.04), ROOM_FLOOR_Z + leg_half_height],
+            size=[0.025, 0.025, leg_half_height],
+            rgba=[0.55, 0.42, 0.28, 1.0],
+            contype=0,
+            conaffinity=0,
+        )
+    arm.worldbody.add_geom(
+        name="robot_riser",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=[-0.03, 0.0, 0.5 * ROBOT_RISER_HEIGHT],
+        size=[0.13, 0.10, 0.5 * ROBOT_RISER_HEIGHT],
+        rgba=[0.58, 0.58, 0.60, 1.0],
         friction=[1.0, 0.005, 0.0001],
     )
     arm.worldbody.add_camera(name="overhead", pos=[0.15, 0.0, 2.2], quat=[1, 0, 0, 0], fovy=50)
     arm.worldbody.add_camera(
         name="isometric",
-        pos=[0.95, -0.85, 0.95],
-        quat=_camera_quat(np.array([0.95, -0.85, 0.95]), np.array([0.25, -0.30, 0.45])),
+        pos=[0.95, -0.85, 0.80],
+        quat=_camera_quat(np.array([0.95, -0.85, 0.80]), np.array([0.25, -0.25, 0.25])),
         fovy=48,
     )
     arm.worldbody.add_camera(
         name="front_view",
-        pos=[1.10, -0.22, 0.70],
-        quat=_camera_quat(np.array([1.10, -0.22, 0.70]), np.array([0.25, -0.25, 0.45])),
+        pos=[1.10, -0.22, 0.50],
+        quat=_camera_quat(np.array([1.10, -0.22, 0.50]), np.array([0.25, -0.25, 0.20])),
         fovy=48,
     )
     arm.worldbody.add_camera(
         name="side_view",
-        pos=[0.25, -1.15, 0.70],
-        quat=_camera_quat(np.array([0.25, -1.15, 0.70]), np.array([0.25, -0.30, 0.45])),
+        pos=[0.25, -1.15, 0.50],
+        quat=_camera_quat(np.array([0.25, -1.15, 0.50]), np.array([0.25, -0.25, 0.20])),
         fovy=48,
     )
     # The close-up follows the pick point, so a relocated object stays framed.
     focus = np.array([pick_position[0], pick_position[1], TABLE_TOP_Z + OBJECT_HALF_HEIGHT])
     close_pos = focus + np.array([0.33, -0.23, 0.17])
     arm.worldbody.add_camera(name="close_grasp", pos=close_pos.tolist(), quat=_camera_quat(close_pos, focus), fovy=38)
-    # Intel RealSense D435 overhead camera mounted on robot head looking down at the table
-    # Matches camera_tf_publisher.py (Openarm-ROS2-robot-control): mounted at [0.08, 0.0, 0.70] looking at workspace [0.30, -0.25, 0.40]
+    # Intel RealSense D435i head camera, measured 68.64mm above the shoulder axis.
+    # Mounted on top of the head at its front edge (the housing's front face is at
+    # x=0.066; further back the housing's own top fills the downward view), looking
+    # down the centre line at the middle of the table so the whole work area -- pick
+    # point, basket and the space around them -- is in the frame.
+    d435_pos = np.array([HEAD_FRONT_X + CAMERA_BODY_HALF_HEIGHT, 0.0, CAMERA_Z])
+    d435_target = np.array([0.30, -0.08, TABLE_TOP_Z])
     arm.worldbody.add_camera(
         name="d435_head",
-        pos=[0.08, 0.0, 0.70],
-        quat=_camera_quat(np.array([0.08, 0.0, 0.70]), np.array([0.30, -0.25, 0.40])),
+        pos=d435_pos.tolist(),
+        quat=_camera_quat(d435_pos, d435_target),
         fovy=55,
     )
     arm.worldbody.add_camera(
         name="realsense_d435",
-        pos=[0.08, 0.0, 0.70],
-        quat=_camera_quat(np.array([0.08, 0.0, 0.70]), np.array([0.30, -0.25, 0.40])),
+        pos=d435_pos.tolist(),
+        quat=_camera_quat(d435_pos, d435_target),
         fovy=55,
     )
     arm.worldbody.add_geom(
         name="realsense_d435_visual",
         type=mujoco.mjtGeom.mjGEOM_BOX,
         size=[0.0125, 0.045, 0.0125],
-        pos=[0.08, 0.0, 0.70],
+        pos=d435_pos.tolist(),
         rgba=[0.3, 0.3, 0.35, 1.0],
         contype=0,
         conaffinity=0,
     )
-    table = arm.geom("table_top")
-    # The table used to span x -0.20..0.90, i.e. it ran underneath the robot, which
-    # stands at x=0. Arms resting at the sides were then over the table top, so once the
-    # pedestal came down far enough to reach the can they hung *into* the table and every
-    # run aborted on a table contact before it started. Moved forward to x 0.10..0.80 so
-    # the robot stands behind its workbench, the way it would in reality; the object at
-    # x=0.30 and the basket at x=0.36 both still sit well inside it.
-    # T-shaped table: the work surface starts in front of the hanging arms (they occupy
-    # x -0.04..0.12, |y| 0.105..0.19 when the robot stands at attention with the arms
-    # straight down), and a narrow tongue behind it carries the pedestal base. So the
-    # arms can hang freely beside the tongue without touching wood.
-    table.size = np.array([0.285, 0.55, 0.04])   # x 0.13 .. 0.70
-    table.pos = np.array([-0.055, 0.0, 0.0])
-    # Pedestal mounting base on table: extends under the robot base so the robot is mounted on the table
-    arm.body("table").add_geom(
-        name="table_pedestal_mount",
-        type=mujoco.mjtGeom.mjGEOM_BOX,
-        pos=[-0.52, 0.0, 0.0],
-        size=[0.15, 0.10, 0.04],   # x -0.20 .. 0.10, |y| <= 0.10: just the base block's footprint
-        rgba=[0.82, 0.71, 0.55, 1.0],
-    )
     # The pedestal body carries both arms, so raising it raises the shoulders too.
     pedestal = arm.body("openarm_body_link0")
     pedestal.pos = np.asarray(pedestal.pos) + [0.0, 0.0, PEDESTAL_RAISE]
-    _pedestal_on_table(arm)
     for side in MOUNTS:
         _remove_stock_gripper(arm, side)
         _attach_hand(arm, side)

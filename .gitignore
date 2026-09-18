@@ -11,3 +11,6 @@ artifacts/*.png
 !artifacts/perception_*.png
 scratch_*
 ycb_renders/
+
+# Recorded episode viewer output (regenerate with scripts/record_episode.py)
+artifacts/episodes/

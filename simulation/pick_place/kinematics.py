@@ -15,6 +15,8 @@ from simulation.pick_place.config import (
     EE_SITE,
     IK_DAMPING,
     IK_MAX_ITERATIONS,
+    IK_STALL_ITERATIONS,
+    IK_STALL_TOLERANCE,
     IK_MAX_STEP,
     IK_POSITION_TOLERANCE,
     IK_ROTATION_TOLERANCE,
@@ -95,6 +97,8 @@ def solve_pose_ik(
     target: np.ndarray,
     target_mat: np.ndarray,
     initial: np.ndarray,
+    *,
+    max_iterations: int = IK_MAX_ITERATIONS,
 ) -> np.ndarray:
     """Damped least-squares IK for the wrist site with a straight-wrist nullspace task.
 
@@ -108,12 +112,25 @@ def solve_pose_ik(
     jacobian_pos = np.zeros((3, model.nv))
     jacobian_rot = np.zeros((3, model.nv))
     n = len(qpos_ids)
-    for _ in range(IK_MAX_ITERATIONS):
-        mujoco.mj_forward(model, data)
+    best_error, stalled = np.inf, 0
+    for _ in range(max_iterations):
+        # Only the kinematics feed the site pose and Jacobian; the full mj_forward
+        # (collision, dynamics) cost ~6x more per iteration for nothing.
+        mujoco.mj_kinematics(model, data)
+        mujoco.mj_comPos(model, data)
         position_error = np.asarray(target) - data.site_xpos[site_id]
         rotation_error = orientation_error(data.site_xmat[site_id].reshape(3, 3), target_mat)
         if np.linalg.norm(position_error) < IK_POSITION_TOLERANCE and np.linalg.norm(rotation_error) < IK_ROTATION_TOLERANCE:
             return data.qpos[qpos_ids].copy()
+        # An unreachable target pins the solver against joint limits; give up once
+        # the error stops improving instead of spinning through every iteration.
+        total_error = float(np.linalg.norm(position_error) + IK_ROTATION_WEIGHT * np.linalg.norm(rotation_error))
+        if total_error < best_error - IK_STALL_TOLERANCE:
+            best_error, stalled = total_error, 0
+        else:
+            stalled += 1
+            if stalled >= IK_STALL_ITERATIONS:
+                break
         mujoco.mj_jacSite(model, data, jacobian_pos, jacobian_rot, site_id)
         jacobian = np.vstack((jacobian_pos[:, dof_ids], IK_ROTATION_WEIGHT * jacobian_rot[:, dof_ids]))
         error = np.concatenate((position_error, IK_ROTATION_WEIGHT * rotation_error))

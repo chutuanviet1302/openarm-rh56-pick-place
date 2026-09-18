@@ -22,30 +22,30 @@ EE_SITE = {"left": "left_ee_control_point", "right": "right_ee_control_point"}
 BOTTLE_JOINT = "pick_bottle_joint"
 OBJECT_GEOM = "pick_bottle_collision"
 FINGER_NAMES = ("thumb", "index", "middle", "ring", "pinky")
-# OpenArm v2 wrist: joint5 = forearm roll, joint6 (axis y) and joint7 (axis x) are the
-# two bend axes of the wrist. "Hand in line with the forearm" means both are zero.
+# OpenArm v1 wrist: joint6 and joint7 are the two bend axes. "Hand in line with the
+# forearm" means both are zero.
 WRIST_PITCH_INDEX = 5
 WRIST_BEND_INDICES = (5, 6)
 
 # --------------------------------------------------------------------------- posture
-# Reference grasp posture for the right arm with the wrist *straight* (joint6 = joint7
-# = 0), so hand and forearm form one line the way a person's do when picking a bottle
-# up from the side. Found with scripts/sweep_postures.py (re-run it whenever the arm
-# model or the hand mount changes): the jaw lands on the table at can-waist height with
-# the fingers near horizontal. The grasp orientation and the default pick point A are
-# both derived from it by forward kinematics, so they cannot drift apart.
-# OpenArm v1, hand along link7's +z: reaches forward over the table, palm toward the
-# midline, fingers forward/outward and 14 degrees down, wrist bend -0.5 / +3.3 degrees.
-NATURAL_GRASP_JOINTS = np.array([-0.14, 0.041, 0.44, 1.373, 0.211, -0.008, 0.058])
+# Reference posture is selected by scripts/sweep_postures.py from collision-free
+# top-grasps 20/25/30 degrees off vertical. The exact value is updated from that sweep.
+NATURAL_GRASP_JOINTS = np.array([0.065, 0.283, -1.042, 0.709, -0.395, -0.219, -0.658])
 RIGHT_SEED = NATURAL_GRASP_JOINTS
-# Symmetric attention stance; the left arm mirrors the right (see Scene.attention_pose).
-# Fists held in front of the body over the table (elbow ~125 degrees), fingers straight
-# forward, palms facing each other, ~14cm above the table, wrist straight
-# (scripts/sweep_postures.py, OpenArm v1).
-ATTENTION_RIGHT = np.array([-0.886, 0.547, 0.464, 2.177, -0.083, 0.0, 0.0])
+TOP_GRASP_TILT_CANDIDATES_DEG = (20.0, 25.0, 30.0)
+MIN_JOINT_MARGIN_DEG = 3.0
+MIN_FLOOR_CLEARANCE = 0.005
+# Attention stance ("nghiem"): both arms hanging straight at the sides, fists closed,
+# fingers down, palms facing the body. That is the OpenArm v1 zero pose with the hand
+# mounted along the flange axis; the left arm mirrors the right (see Scene.attention_pose).
+ATTENTION_RIGHT = np.zeros(7)
 
 # --------------------------------------------------------------------------- IK
 IK_MAX_ITERATIONS = 6000
+# Stop early when the pose error has not improved by IK_STALL_TOLERANCE for this many
+# iterations (an unreachable target otherwise burns the whole budget: ~2.6s each).
+IK_STALL_ITERATIONS = 40
+IK_STALL_TOLERANCE = 1e-5
 IK_POSITION_TOLERANCE = 0.006
 IK_ROTATION_TOLERANCE = 0.05
 IK_ROTATION_WEIGHT = 0.4
@@ -61,17 +61,25 @@ GRASP_CLOSURE_FRACTION = 0.20
 # Minimum free space per side between the open jaw and the object.
 GRASP_CLEARANCE = 0.0005
 # Raises the grip so the fingers close around the object rather than into the table.
-GRASP_HEIGHT_BIAS = 0.02
+GRASP_HEIGHT_BIAS = 0.04
 # Bias along the thumb-to-fingers line to centre the can in the aperture.
 JAW_AXIS_BIAS = -0.011
 # 0 sits the wrist at the jaw midpoint, 0.5 puts the fingers themselves on the object.
 JAW_BIAS_TOWARD_FINGERS = 0.0
 GRASP_POSITION_CORRECTION = np.array([0.0, 0.0, 0.0])
-# Standoff behind the grasp, along the fingers' horizontal pointing direction.
+# Standoff opposite the fingers' full 3-D pointing direction.
 APPROACH_STANDOFF = 0.08
 # How high the hand rides before descending onto the standoff. 8cm let the hand sweep
 # through the can on the way in from the attention stance; 15cm clears it.
-HOVER_HEIGHT = 0.15
+HOVER_HEIGHT = 0.08
+# Extra height of the 'raise' way point (above the hanging hand) over the hover.
+RAISE_ABOVE_HOVER = 0.10
+# Room the fist must keep from the basket/object/table along the unplanned joint
+# blends (attention <-> raise <-> hover); the executed arm lags the command by a few mm.
+PATH_CLEARANCE = 0.02
+# Horizontal offsets (x, y) of the raise way point from the hanging hand, tried in
+# order at each height: straight up first, then back, outward and inward.
+RAISE_XY_OFFSETS = ((0.0, 0.0), (-0.06, 0.0), (0.0, -0.06), (0.0, 0.06), (-0.06, -0.06), (-0.06, 0.06))
 
 # --------------------------------------------------------------------------- carry / place
 # The object's *bottom* must ride at least this far above the basket walls.
@@ -84,12 +92,22 @@ CARRY_CLEARANCE_MARGIN = 0.01
 # actually touches the floor (SET_DOWN_*), and only then opens: releasing a can that is
 # still in the air let the opening thumb lever it 5cm up and it landed 3cm off.
 PLACE_DROP_HEIGHT = 0.02
+PLACE_POSITION_CORRECTION = np.array([0.018, 0.007, 0.0])
 SET_DOWN_STEP = 0.004
 SET_DOWN_MAX_DEPTH = 0.04
+# The set-down keeps descending until the object's centre is within this of its
+# flat-resting height (it first touches on its rim when held tilted).
+SET_DOWN_SEATED_TOLERANCE = 0.003
 SET_DOWN_STEP_SECONDS = 0.15
 # The carried object stays upright under any rotation about world z, so the place side
 # may turn the hand about the vertical to wherever the arm reaches best. First
 # candidate whose transfer *and* set-down poses both solve wins.
+# The grasp itself may also turn about the vertical (a round can has no preferred
+# heading); 0 is the reference posture, tried first.
+GRASP_YAW_CANDIDATES_DEG = (0.0, -30.0, 30.0, -60.0, 60.0, -90.0, 90.0)
+# How many physically rejected grasps (finger not pressing, proof lift failed) the
+# episode lets go of and retries with another heading before giving up.
+GRASP_RETRIES = 3
 PLACE_YAW_CANDIDATES_DEG = (0.0, -30.0, 30.0, -60.0, 60.0, -90.0, 90.0, -120.0, 120.0, -150.0, 150.0, 180.0)
 # Number of Cartesian waypoints on the transfer and lowering segments. Joint-space
 # interpolation between only the endpoints let the hand pitch on the way and the can
@@ -112,6 +130,8 @@ PROOF_LIFT_MAX_TILT_DEG = 15.0
 CONTACT_FORCE_TARGET_N = 8.0
 # Minimum normal force for a finger to count as "pressing" before the lift.
 GRASP_SECURE_MIN_FORCE_N = 0.5
+GRASP_SECURE_MIN_THUMB_FORCE_N = 6.0  # secure grasps measured 9-24N on the thumb
+GRASP_SECURE_MIN_OPPOSING_FORCE_N = 1.0  # index or middle must press back against the thumb
 CLOSE_STEP_FRACTION = 0.01
 CLOSE_SETTLE_SECONDS = 0.02
 CLOSE_MAX_ITERATIONS = 120
@@ -125,15 +145,16 @@ BASKET_CONTACT_TOLERANCE = 0.003  # same graze allowance as the table
 # --------------------------------------------------------------------------- randomization
 # Sampling boxes (table-plane x, y) covering the region the straight-wrist grasp reaches.
 # Every sample is still verified by IK before physics runs (demo.sample_layout).
-RANDOM_PICK_BOX = ((0.38, 0.46), (-0.38, -0.28))
-RANDOM_BASKET_BOX = ((0.36, 0.46), (-0.06, 0.06))
+RANDOM_PICK_BOX = ((0.12, 0.18), (-0.38, -0.33))
+RANDOM_BASKET_BOX = ((0.22, 0.26), (-0.06, -0.02))
 MIN_PICK_TO_BASKET_M = 0.15
 # The wrapped hand reaches ~8cm beyond the can's surface, so the basket's nearest wall
 # must stay this far from the object's centre or the thumb clips it at grasp.
-MIN_OBJECT_TO_BASKET_M = 0.12
+MIN_OBJECT_TO_BASKET_M = 0.06
 
 # --------------------------------------------------------------------------- timing (s)
 SETTLE_AT_START = 1.5
+MOVE_TO_RAISE = 1.0
 MOVE_TO_HOVER = 1.2
 MOVE_TO_READY = 0.8
 PRESHAPE_SETTLE = 0.3
@@ -144,7 +165,9 @@ PROOF_LIFT_SECONDS = 0.8
 MOVE_TO_LIFT = 1.2
 TRANSFER_SECONDS = 2.0
 LOWER_SECONDS = 1.2
-RELEASE_SECONDS = 0.8
+ALL_FINGERS = ("index", "middle", "ring", "pinky", "thumb")
+RELAX_GRIP_SECONDS = 0.6  # grip force -> light contact before the fingers open
+RELEASE_SECONDS = 1.0
 RETREAT_SECONDS = 1.0
 RETURN_SECONDS = 1.2
 FINAL_SETTLE = 3.0

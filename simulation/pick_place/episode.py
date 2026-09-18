@@ -72,15 +72,19 @@ class EpisodeLog:
         self.values: dict = {}
         self.current_phase: str | None = None
         self.observations: dict[str, dict[str, list[float]]] = {}
+        # Everything printed, with its sim time, so a recording can show a timeline.
+        self.events: list[dict] = []
 
     def _stamp(self) -> str:
         return f"[t={self._sim_time():6.2f}s]"
 
     def phase(self, index: int, total: int, name: str, message: str) -> None:
         self.current_phase = name
+        self.events.append({"t": float(self._sim_time()), "kind": "phase", "phase": name, "message": message})
         print(f"{self._stamp()} {index}/{total} {name.upper()}: {message}")
 
     def note(self, message: str) -> None:
+        self.events.append({"t": float(self._sim_time()), "kind": "note", "phase": self.current_phase, "message": message})
         print(f"{self._stamp()}      {message}")
 
     def debug(self, message: str) -> None:

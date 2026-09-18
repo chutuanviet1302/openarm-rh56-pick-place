@@ -4,7 +4,12 @@ import mujoco
 import numpy as np
 
 from simulation.openarm_mujoco import LEFT_ARM_ACTUATORS, LEFT_EE_SITE, MujocoRobot, official_model_path
-from simulation.five_finger_model import HAND_PREFIX, build_five_finger_model
+from simulation.five_finger_model import (
+    TABLE_TOP_Z,
+    HAND_PREFIX,
+    ROBOT_RISER_HEIGHT,
+    build_five_finger_model,
+)
 from simulation.pick_place_demo import Demo
 
 
@@ -92,25 +97,31 @@ class MujocoSmokeTests(unittest.TestCase):
                 hand_vs_arm = ("inspire" in b1) != ("inspire" in b2) and ("openarm" in b1 or "openarm" in b2)
                 self.assertFalse(hand_vs_arm and contact.dist < 0, f"{pose}: {b1} intersects {b2}")
 
-    def test_arms_hanging_straight_down_do_not_touch_the_table(self):
-        """Standing at attention with every arm joint at zero, both arms hang beside
-        the pedestal tongue and nothing of the robot touches the table."""
-        model = build_five_finger_model(pick_bottle=True)
-        data = mujoco.MjData(model)
-        for side in ("left", "right"):
-            for name in (f"openarm_{side}_joint{i}" for i in range(1, 8)):
-                data.qpos[model.joint(name).qposadr[0]] = 0.0
-        mujoco.mj_forward(model, data)
-        table_geoms = {model.geom("table_top").id, model.geom("table_pedestal_mount").id}
+    def test_attention_pose_does_not_touch_floor_or_riser(self):
+        demo = Demo()
+        model, data = demo.model, demo.data
+        support_geoms = {model.geom(name).id for name in ("table_top", "robot_riser")}
         offenders = set()
         for contact in data.contact[: data.ncon]:
-            if contact.dist >= 0 or not ({contact.geom1, contact.geom2} & table_geoms):
+            if contact.dist >= 0 or not ({contact.geom1, contact.geom2} & support_geoms):
                 continue
-            other = contact.geom2 if contact.geom1 in table_geoms else contact.geom1
+            other = contact.geom2 if contact.geom1 in support_geoms else contact.geom1
             body = model.body(model.geom_bodyid[other]).name or ""
             if "openarm" in body or "inspire" in body:
                 offenders.add(body)
-        self.assertFalse(offenders, f"robot touches the table with arms straight down: {sorted(offenders)}")
+        self.assertFalse(offenders, f"robot touches the floor/riser in attention pose: {sorted(offenders)}")
+
+    def test_openarm_v1_joint_and_servo_limits_match_vendor_model(self):
+        model = build_five_finger_model()
+        expected_deg = {
+            "right": np.array([[-80, 200], [-10, 190], [-90, 90], [0, 140], [-90, 90], [-45, 45], [-90, 90]]),
+            "left": np.array([[-200, 80], [-190, 10], [-90, 90], [0, 140], [-90, 90], [-45, 45], [-90, 90]]),
+        }
+        for side in ("left", "right"):
+            joints = np.array([model.joint(f"openarm_{side}_joint{i}").range for i in range(1, 8)])
+            controls = np.array([model.actuator(f"{side}_joint{i}_ctrl").ctrlrange for i in range(1, 8)])
+            np.testing.assert_allclose(np.degrees(joints), expected_deg[side], atol=1e-3)
+            np.testing.assert_array_equal(controls, joints)
 
     def test_hands_continue_the_forearm_axis(self):
         """The Inspire hand is bolted to the flange along the tool axis: its fingers
@@ -144,42 +155,44 @@ class MujocoSmokeTests(unittest.TestCase):
             palm_normal = data.xmat[hand].reshape(3, 3)[:, 0]
             self.assertGreater(inward * palm_normal[1], 0.9, f"{side} palm should face the midline")
 
-    def test_attention_pose_holds_fists_forward_over_the_table(self):
-        # Demo() starts in a symmetric stance: fists closed in front of the body over
-        # the table, fingers forward, palms facing each other, wrist straight.
+    def test_attention_pose_hangs_at_the_sides_palms_to_the_body(self):
+        # Demo() starts at attention: arms straight down at the sides, fists closed,
+        # fingers pointing down, palms facing the body, clear of the table top.
         demo = Demo()
         for side, inward in (("left", -1.0), ("right", +1.0)):
             base = demo.data.xpos[demo.model.body(f"inspire_{side}_base").id]
-            self.assertGreater(base[0], 0.12)
+            self.assertLess(abs(base[0]), 0.03)
             mat = demo.data.xmat[demo.model.body(f"inspire_{side}_base").id].reshape(3, 3)
-            self.assertGreater(mat[0, 2], 0.9, "fingers point forward (+x)")
-            self.assertGreater(inward * mat[1, 0], 0.7, "palm faces the midline")
-            for index in (5, 6):
-                self.assertAlmostEqual(float(demo.data.qpos[demo.arm_qpos[side][index]]), 0.0, places=3)
-            # Hand clearance above table is ~7cm
+            self.assertLess(mat[2, 2], -0.9, "fingers point down (-z)")
+            self.assertGreater(inward * mat[1, 0], 0.9, "palm faces the body")
             min_z = min(
                 demo.data.geom_xpos[g, 2] - (demo.model.geom_size[g, 2] if demo.model.geom_type[g] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_CYLINDER) else demo.model.geom_size[g, 0])
                 for g in range(demo.model.ngeom) if f"inspire_{side}" in (demo.model.body(demo.model.geom_bodyid[g]).name or "")
             )
-            clearance = min_z - 0.40
-            self.assertGreaterEqual(clearance, 0.05)
-            self.assertLessEqual(clearance, 0.20)
+            self.assertGreaterEqual(min_z - TABLE_TOP_Z, 0.03)  # fingertips hang 3.6cm over the top
 
-    def test_robot_pedestal_and_bottle_are_on_table(self):
+    def test_robot_riser_bottle_and_basket_are_on_the_table(self):
         model = build_five_finger_model(pick_bottle=True)
-        # The pedestal's base block (x -0.155..0.095) stands on the rear tongue of the
-        # table, and the work surface starts in front of the hanging arms.
-        tongue = model.geom("table_pedestal_mount")
-        tongue_center = model.body(tongue.bodyid[0]).pos + tongue.pos
-        self.assertLessEqual(tongue_center[0] - tongue.size[0], -0.155)
-        self.assertGreaterEqual(tongue_center[0] + tongue.size[0], 0.095)
-        self.assertAlmostEqual(float(tongue_center[2] + tongue.size[2]), 0.40, places=3)
-        table = model.geom("table_top")
-        table_center = model.body(table.bodyid[0]).pos + table.pos
-        self.assertGreaterEqual(table_center[0] - table.size[0], 0.12)
+        for removed in ("table_pedestal_mount", "work_platform"):
+            with self.assertRaises(KeyError):
+                model.geom(removed)
+        # The table top is the z=0 work surface and runs under the robot; the room
+        # floor (vendor ground plane) is one measured table height below it.
+        table = model.geom("table_top_visual")
+        self.assertAlmostEqual(float(table.pos[2] + table.size[2]), TABLE_TOP_Z, places=3)
+        self.assertLess(float(table.pos[0] - table.size[0]), -0.15)
+        self.assertAlmostEqual(float(model.geom("table_top").pos[2]), TABLE_TOP_Z, places=6)
+        self.assertAlmostEqual(float(model.geom("floor").pos[2]), TABLE_TOP_Z - 0.74, places=3)
+        riser = model.geom("robot_riser")
+        riser_center = model.body(riser.bodyid[0]).pos + riser.pos
+        self.assertAlmostEqual(float(riser_center[2] - riser.size[2]), TABLE_TOP_Z, places=3)
+        self.assertAlmostEqual(float(riser_center[2] + riser.size[2]), ROBOT_RISER_HEIGHT, places=3)
         data = mujoco.MjData(model)
         mujoco.mj_forward(model, data)
-        self.assertGreater(float(data.xpos[model.body("openarm_left_link0").id][2]), 0.40)
+        self.assertAlmostEqual(float(data.xpos[model.body("openarm_left_link0").id][2]), ROBOT_RISER_HEIGHT + 0.698, places=3)
+        self.assertAlmostEqual(float(data.xpos[model.body("pick_bottle").id][2]), TABLE_TOP_Z + 0.05, places=3)
+        basket = model.geom("place_basket_bottom")
+        self.assertAlmostEqual(float(data.geom_xpos[basket.id][2] - basket.size[2]), TABLE_TOP_Z, places=3)
         self.assertEqual(model.joint("pick_bottle_joint").type[0], mujoco.mjtJoint.mjJNT_FREE)
         self.assertEqual(model.geom("ycb_mustard_bottle_visual").type[0], mujoco.mjtGeom.mjGEOM_MESH)
 

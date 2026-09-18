@@ -50,6 +50,8 @@ class Demo:
         self.perceived_position: np.ndarray | None = None
         self.perception_error_m: float | None = None
         self.plan: Plan | None = None
+        self.light_grip_ctrl: np.ndarray | None = None
+        self.failed_grasp_yaws: list[float] = []
 
     # ------------------------------------------------------------------ convenience views
     @property
@@ -105,11 +107,25 @@ class Demo:
     # ------------------------------------------------------------------ grasp checks
     def fingers_not_pressing(self) -> list[str]:
         forces = self.scene.finger_contact_forces("right")
-        required = C.FINGER_NAMES if self.REQUIRE_THUMB_OPPOSITION else tuple(n for n in C.FINGER_NAMES if n != "thumb")
-        return [name for name in required if forces[name] < C.GRASP_SECURE_MIN_FORCE_N]
+        missing = []
+        # The thumb alone opposes the four fingers, so it carries the load: a thumb that
+        # never built up real pressure (3.7N seen at a heading that then dropped the
+        # can) is a grasp to let go of *before* the proof lift disturbs the object.
+        if self.REQUIRE_THUMB_OPPOSITION and forces["thumb"] < C.GRASP_SECURE_MIN_THUMB_FORCE_N:
+            missing.append("thumb")
+        fingers = [name for name in C.FINGER_NAMES if name != "thumb"]
+        pressing = [name for name in fingers if forces[name] >= C.GRASP_SECURE_MIN_FORCE_N]
+        if len(pressing) < 2:
+            missing.extend(name for name in fingers if name not in pressing)
+        # On this hand the thumb closes against the index/middle side; a grip carried
+        # by ring and pinky alone (index 0N, middle 0.7N seen) pinches the can off
+        # centre and let it slip out on the lift.
+        if all(forces[name] < C.GRASP_SECURE_MIN_OPPOSING_FORCE_N for name in ("index", "middle")):
+            missing.extend(name for name in ("index", "middle") if name not in missing)
+        return missing
 
     def grasp_is_secure(self) -> bool:
-        """Force-based: every finger must press on the object before the lift is allowed."""
+        """Force-based antipodal grasp: thumb opposed by at least two fingers."""
         return not self.fingers_not_pressing()
 
     # ------------------------------------------------------------------ phases
@@ -124,7 +140,8 @@ class Demo:
         )
 
     def phase_plan(self) -> None:
-        self.plan = self.planner.plan(self.object_position())
+        self.plan = self.planner.plan(self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws))
+        self.log.record("grasp_yaw_deg", float(self.plan.grasp_yaw_deg))
         self.log.record("place_yaw_deg", float(self.plan.place_yaw_deg))
         self.log.record("phase_wrist_positions", {k: v.tolist() for k, v in self.plan.centers.items()})
         self.log.record("phase_joint_targets", {k: v.tolist() for k, v in self.plan.joints.items()})
@@ -135,6 +152,7 @@ class Demo:
     def phase_ready(self) -> None:
         ex, plan = self.executor, self.plan
         ex.hold(C.SETTLE_AT_START)
+        ex.move_to({"right_arm": plan["raise"]}, C.MOVE_TO_RAISE)
         ex.move_to({"right_arm": plan["hover"]}, C.MOVE_TO_HOVER)
         ex.move_to({"right_arm": plan["ready"]}, C.MOVE_TO_READY)
 
@@ -159,8 +177,12 @@ class Demo:
 
     def phase_grasp(self) -> None:
         ex, scene = self.executor, self.scene
-        ex.close_until_contact("right", ("index", "middle", "ring", "pinky"))
-        forces = ex.close_until_contact("right", ("thumb",))
+        fingers = ("index", "middle", "ring", "pinky")
+        ex.close_until_contact("right", fingers, force_target=1.0)
+        ex.close_until_contact("right", ("thumb",), force_target=1.0)
+        # Remember the light-contact hand pose: the release returns to it first.
+        self.light_grip_ctrl = scene.data.ctrl[scene.hand_actuators["right"]].copy()
+        forces = ex.close_until_contact("right", (*fingers, "thumb"))
         self.log.note("contact force per finger (N): " + ", ".join(f"{k}={v:.2f}" for k, v in forces.items()))
         # Every finger must be on the object before the hand moves at all; a finger that
         # stopped short is closed further on its own.
@@ -171,9 +193,9 @@ class Demo:
         if missing:
             raise RuntimeError(f"not all fingers touch the object before lift; missing {missing}: {forces}")
         self.log.record("grasp_forces", scene.finger_contact_forces("right"))
-        self.log.note("all 5 fingers in contact -> proof lift")
+        self.log.note("thumb opposed by at least two fingers -> proof lift")
 
-        rise, tilt, hand_rise = ex.proof_lift()
+        rise, tilt, hand_rise = ex.proof_lift(self.planner.orientation)
         slip = hand_rise - rise
         self.log.record("proof_lift_rise_m", rise)
         self.log.record("proof_lift_hand_rise_m", hand_rise)
@@ -204,7 +226,7 @@ class Demo:
         # fingers never close exactly on the nominal jaw centre, and that few-mm offset
         # otherwise turns into a placement error (2.5cm measured with the nominal jaw).
         held = scene.object_position() - scene.wrist_position("right")
-        held_at_grasp_orientation = scene.grasp_orientation @ scene.wrist_rotation("right").T @ held
+        held_at_grasp_orientation = self.planner.orientation @ scene.wrist_rotation("right").T @ held
         self.planner.plan_place(plan, self.object_position(), held_offset=held_at_grasp_orientation)
         self.log.record("held_offset_m", held_at_grasp_orientation)
         self.log.note(f"object held {np.round(held_at_grasp_orientation, 3).tolist()} from the wrist; set-down re-planned")
@@ -219,8 +241,18 @@ class Demo:
         # Set the object down for real: keep descending until it rests on the floor.
         from simulation.pick_place.kinematics import rotation_z
 
-        orientation = rotation_z(plan.place_yaw_deg) @ scene.grasp_orientation
-        went = ex.descend_until("right", orientation, lambda: scene.object_touches("place_basket_bottom"))
+        orientation = rotation_z(plan.place_yaw_deg) @ self.planner.orientation
+        # Stop only once the object stands flat: a can held slightly tilted touches the
+        # floor on its rim first, and releasing it there lets it topple onto its base
+        # and skid a centimetre or more. A few more millimetres of descent let the
+        # fingers give and the base settle before the hand opens.
+        _, height = scene.object_extents()
+        resting_z = float(scene.basket_floor()[2]) + 0.5 * height
+
+        def seated() -> bool:
+            return scene.object_touches("place_basket_bottom") and float(scene.object_position()[2]) <= resting_z + C.SET_DOWN_SEATED_TOLERANCE
+
+        went = ex.descend_until("right", orientation, seated)
         touching = scene.object_touches("place_basket_bottom")
         self.log.record("set_down_descent_m", went)
         self.log.note(f"descended {went*100:.1f}cm more; object {'rests on' if touching else 'is NOT on'} the basket floor")
@@ -229,14 +261,23 @@ class Demo:
 
     def phase_release(self) -> None:
         ex, plan, scene = self.executor, self.plan, self.scene
-        # The object already rests on the floor (phase_carry), so opening cannot drop it;
-        # fingers first, then the thumb swings out of opposition.
-        ex.open_fingers("right", ("index", "middle", "ring", "pinky"), 0.5 * C.RELEASE_SECONDS)
+        # The object already rests on the basket floor (phase_carry). Release in three
+        # steps, measured across four cases (two layouts, with and without RGB-D;
+        # placement 1-12mm, every other ordering tried was worse, up to toppling the
+        # can): first relax the grip back to the light-contact pose so no finger keeps
+        # pushing once its opposite lets go, then uncurl all five fingers together
+        # while the wrist retreats straight up, and only at carry height swing the
+        # thumb out of opposition -- that yaw swing sweeps sideways through the can's
+        # footprint and shoved it 25mm when done at set-down height.
+        ex.move_to({"right_hand": self.light_grip_ctrl}, C.RELAX_GRIP_SECONDS)
+        ex.move_to({"right_hand": scene.hand_ctrl("right", open_fingers=C.ALL_FINGERS), "right_arm": plan["transfer"]}, C.RETREAT_SECONDS)
         ex.open_fingers("right", ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
-        ex.move_to({"right_hand": scene.open_hand["right"]}, 0.3)
-        # Vertical retreat straight up out of the basket, then home.
-        ex.move_to({"right_arm": plan["transfer"]}, C.RETREAT_SECONDS)
+        # Continue home after clearing the basket.
         ex.move_to({"right_arm": plan["hover"], "right_hand": scene.closed_hand["right"]}, C.RETURN_SECONDS)
+        # Back the way it came, via a raise point re-chosen now that the object stands
+        # in the basket, so the hand never sweeps low over the basket or the object.
+        raise_joints, _ = self.planner.find_raise(plan["hover"], plan.centers["hover"])
+        ex.move_to({"right_arm": raise_joints}, C.RETURN_SECONDS)
         ex.move_to({"right_arm": scene.attention_pose["right"]}, C.RETURN_SECONDS)
         ex.hold(C.FINAL_SETTLE)  # settle to verify the object stands on its own
 
@@ -245,7 +286,7 @@ class Demo:
         "plan": "deriving wrist targets from object, basket and hand geometry, solving IK chain",
         "ready": "attention stance, then raising the right arm to hover",
         "reach": "opening the hand, sliding in horizontally around the object",
-        "grasp": "closing 4 fingers then thumb, verifying all 5 press, proof lift",
+        "grasp": "making light opposing contact, increasing grip force, proof lift",
         "carry": "lifting above the basket rim, moving A -> B, lowering",
         "release": "opening the hand, setting the object down, retreating",
     }
@@ -256,13 +297,43 @@ class Demo:
         if stop_after is not None and stop_after not in PHASES:
             raise ValueError(f"unknown phase {stop_after!r}; choose from {PHASES}")
         self.executor.viewer = viewer
-        for index, name in enumerate(PHASES, start=1):
-            self.log.phase(index, len(PHASES), name, self.PHASE_MESSAGES[name])
-            getattr(self, f"phase_{name}")()
+        index = 0
+        while index < len(PHASES):
+            name = PHASES[index]
+            self.log.phase(index + 1, len(PHASES), name, self.PHASE_MESSAGES[name])
+            try:
+                getattr(self, f"phase_{name}")()
+            except RuntimeError as error:
+                # A grasp the physics rejects (a finger not pressing, the proof lift
+                # leaving the object behind) is retried with the next grasp heading:
+                # IK feasibility alone does not tell which heading holds the can.
+                if name != "grasp" or len(self.failed_grasp_yaws) >= C.GRASP_RETRIES:
+                    raise
+                self.failed_grasp_yaws.append(float(self.plan.grasp_yaw_deg))
+                self.log.note(f"grasp at yaw {self.plan.grasp_yaw_deg:+.0f} rejected ({error}); letting go and retrying")
+                self.recover_from_failed_grasp()
+                index = PHASES.index("perceive")
+                continue
             self.log.observe(name, object=self.scene.object_position(), wrist=self.scene.wrist_position("right"))
             if name == stop_after:
                 self.log.note(f"stopped after '{name}' as requested")
                 return
+            index += 1
+
+    def recover_from_failed_grasp(self) -> None:
+        """Let go of the object where it is and return to attention, the same way the
+        release does, so the episode can plan afresh from a clean stance."""
+        ex, plan, scene = self.executor, self.plan, self.scene
+        if self.light_grip_ctrl is not None:
+            ex.move_to({"right_hand": self.light_grip_ctrl}, C.RELAX_GRIP_SECONDS)
+        ex.move_to({"right_hand": scene.hand_ctrl("right", open_fingers=C.ALL_FINGERS), "right_arm": plan["hover"]}, C.RETREAT_SECONDS)
+        ex.open_fingers("right", ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
+        ex.move_to({"right_hand": scene.closed_hand["right"]}, 0.5 * C.RELEASE_SECONDS)
+        raise_joints, _ = self.planner.find_raise(plan["hover"], plan.centers["hover"])
+        ex.move_to({"right_arm": raise_joints}, C.RETURN_SECONDS)
+        ex.move_to({"right_arm": scene.attention_pose["right"]}, C.RETURN_SECONDS)
+        ex.hold(C.SETTLE_AT_START)
+        self.perceived_position = None  # look again: the failed grasp may have moved it
 
     def restart(self) -> None:
         """Put the scene back at the start of an episode and clear the log, so `run()`
@@ -271,6 +342,8 @@ class Demo:
         self.log = EpisodeLog(lambda: self.scene.data.time, verbose=self.log.verbose)
         self.executor = Executor(self.scene, on_step=self.executor.on_step)
         self.perceived_position = None
+        self.light_grip_ctrl: np.ndarray | None = None
+        self.failed_grasp_yaws: list[float] = []
         self.perception_error_m = None
         self.plan = None
 
@@ -333,6 +406,12 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
     scene, values = demo.scene, demo.log.values
     final_pos = scene.object_position()
     placement_error = float(np.linalg.norm(final_pos[:2] - scene.basket_floor()[:2]))
+    tilt = upright_tilt_degrees(scene.object_quaternion())
+    if failure is None and stop_after is None:
+        if placement_error > 0.02:
+            failure = f"placement error {placement_error*1000:.1f}mm exceeds 20mm"
+        elif tilt > C.PROOF_LIFT_MAX_TILT_DEG:
+            failure = f"final object tilt {tilt:.1f}deg exceeds {C.PROOF_LIFT_MAX_TILT_DEG:.0f}deg"
     return TrialResult(
         failure is None,
         failure,
@@ -340,7 +419,7 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
         final_pos.tolist(),
         float(scene.data.time),
         placement_error_m=placement_error,
-        bottle_tilt_deg=upright_tilt_degrees(scene.object_quaternion()),
+        bottle_tilt_deg=tilt,
         contact_forces=scene.finger_contact_forces("right"),
         pick_position=list(scene.pick_position),
         basket_position=list(scene.basket_position),

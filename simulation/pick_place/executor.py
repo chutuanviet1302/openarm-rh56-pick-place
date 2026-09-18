@@ -31,17 +31,16 @@ class Executor:
     # ------------------------------------------------------------------ stepping
     def _step(self) -> None:
         mujoco.mj_step(self.model, self.data)
-        mujoco.mj_forward(self.model, self.data)
         self._check_collisions()
         if self.on_step is not None:
             self.on_step(self)
         self._render()
 
     def _check_collisions(self) -> None:
-        offenders = self.scene.table_contacts()
+        offenders = self.scene.support_contacts()
         if offenders:
             detail = ", ".join(f"{body} {depth:.1f}mm" for body, depth in sorted(offenders.items()))
-            raise RuntimeError(f"trajectory aborted: {detail} inside the table")
+            raise RuntimeError(f"trajectory aborted: {detail} inside the floor")
         offenders = self.scene.basket_contacts()
         if offenders:
             detail = ", ".join(f"{body} {depth:.1f}mm" for body, depth in sorted(offenders.items()))
@@ -59,9 +58,15 @@ class Executor:
         if sim_time - self._last_frame_time >= C.VIEWER_FRAME_SECONDS:
             self.viewer.sync()
             self._last_frame_time = sim_time
+            now = time.perf_counter()
             ahead = self._wall_anchor + sim_time - now
             if ahead > 0.0:
-                time.sleep(ahead)
+                # Windows sleep overshoots short frame deadlines; leave the last 1ms
+                # to a precise wait so motion does not alternate between stalls/bursts.
+                if ahead > 0.001:
+                    time.sleep(ahead - 0.001)
+                while time.perf_counter() < self._wall_anchor + sim_time:
+                    pass
             elif ahead < -0.5:
                 self._wall_anchor = now - sim_time  # fell far behind: re-anchor, don't race
 
@@ -78,24 +83,35 @@ class Executor:
         self.follow({group: [target] for group, target in targets.items()}, [seconds])
 
     def follow(self, waypoints: dict[str, list[np.ndarray]], durations: list[float]) -> None:
-        """Blend each group (`right_arm`, `right_hand`, ...) through its waypoints.
-
-        One ease-in/ease-out envelope spans the whole multi-waypoint path with linear
-        blending in between, so the motion never stops at intermediate poses.
-        """
+        """Follow waypoints with continuous joint velocity and zero-speed endpoints."""
         groups = list(waypoints)
         paths = {group: [self.data.qpos[self.scene.qpos_for(group)].copy(), *waypoints[group]] for group in groups}
         cumulative = np.cumsum([0.0, *durations])
-        fraction_at = cumulative / cumulative[-1]
         steps = self.seconds_to_steps(cumulative[-1])
         for index in range(steps):
-            eased = quintic((index + 1) / steps)
-            segment = int(np.clip(np.searchsorted(fraction_at, eased, side="right") - 1, 0, len(durations) - 1))
-            span = fraction_at[segment + 1] - fraction_at[segment]
-            local_t = 0.0 if span <= 0 else (eased - fraction_at[segment]) / span
+            elapsed = (index + 1) * cumulative[-1] / steps
+            segment = int(np.clip(np.searchsorted(cumulative, elapsed, side="right") - 1, 0, len(durations) - 1))
+            local_t = (elapsed - cumulative[segment]) / durations[segment]
             for group in groups:
-                start, end = paths[group][segment], paths[group][segment + 1]
-                self.data.ctrl[self.scene.ctrl_for(group)] = start + local_t * (end - start)
+                points = paths[group]
+                start, end = points[segment], points[segment + 1]
+                if len(durations) == 1:
+                    target = start + quintic(local_t) * (end - start)
+                else:
+                    before = np.zeros_like(start) if segment == 0 else (
+                        points[segment + 1] - points[segment - 1]
+                    ) / (cumulative[segment + 1] - cumulative[segment - 1])
+                    after = np.zeros_like(end) if segment + 1 == len(points) - 1 else (
+                        points[segment + 2] - points[segment]
+                    ) / (cumulative[segment + 2] - cumulative[segment])
+                    u, dt = local_t, durations[segment]
+                    target = (
+                        (2*u**3 - 3*u**2 + 1) * start
+                        + (u**3 - 2*u**2 + u) * dt * before
+                        + (-2*u**3 + 3*u**2) * end
+                        + (u**3 - u**2) * dt * after
+                    )
+                self.data.ctrl[self.scene.ctrl_for(group)] = target
             self._step()
 
     # ------------------------------------------------------------------ hand
@@ -166,14 +182,17 @@ class Executor:
         target = scene.wrist_position(side).copy()
         descended = 0.0
         while not stop() and descended < max_depth:
+            target[2] = start_z - descended - C.SET_DOWN_STEP
+            try:
+                seed = solve_pose_ik(self.model, side, target, orientation, seed)
+            except RuntimeError:
+                break  # at the arm's reach; the caller judges whether the object is down
             descended += C.SET_DOWN_STEP
-            target[2] = start_z - descended
-            seed = solve_pose_ik(self.model, side, target, orientation, seed)
             self.move_to({f"{side}_arm": seed}, C.SET_DOWN_STEP_SECONDS)
         return descended
 
     # ------------------------------------------------------------------ proof lift
-    def proof_lift(self) -> tuple[float, float, float]:
+    def proof_lift(self, orientation: np.ndarray) -> tuple[float, float, float]:
         """Lift PROOF_LIFT_HEIGHT under physics. Returns (object rise, object tilt deg,
         hand rise). Nothing is welded: if the grip is not real the object stays put."""
         scene = self.scene
@@ -182,7 +201,7 @@ class Executor:
         start = self.data.ctrl[scene.arm_actuators["right"]].copy()
         target = solve_pose_ik(
             self.model, "right", scene.wrist_position("right") + np.array([0.0, 0.0, C.PROOF_LIFT_HEIGHT]),
-            scene.grasp_orientation, start,
+            orientation, start,
         )
         steps = self.seconds_to_steps(C.PROOF_LIFT_SECONDS)
         for index in range(steps):
