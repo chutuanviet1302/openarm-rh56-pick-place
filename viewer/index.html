@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Episode Viewer</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --line: #2a2f3a;
+    --text: #e6e8ee; --muted: #8b93a7; --accent: #4f8cff; --ok: #3ccf7a; --bad: #ff5d5d;
+    --perceive: #7c6cff; --plan: #4f8cff; --ready: #3ab7d8; --reach: #3ccf7a;
+    --grasp: #f5c542; --carry: #ff8e42; --release: #ff5d9e;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, "Segoe UI", Roboto, sans-serif; }
+  body { display: grid; grid-template-columns: 250px 1fr; }
+  aside { background: var(--panel); border-right: 1px solid var(--line); padding: 14px; overflow-y: auto; min-height: 0; }
+  main { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 12px 16px; gap: 10px; }
+  h1 { font-size: 15px; margin: 0 0 10px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 14px 0 6px; }
+  .muted { color: var(--muted); }
+  .episode { display: block; width: 100%; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; font: inherit; }
+  .episode:hover { border-color: var(--accent); }
+  .episode.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .episode .name { font-weight: 600; }
+  .episode .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin-left: 6px; vertical-align: middle; }
+  .pill.ok { background: rgba(60,207,122,.15); color: var(--ok); }
+  .pill.bad { background: rgba(255,93,93,.15); color: var(--bad); }
+  .banner { flex: none; display: flex; flex-wrap: wrap; gap: 4px 20px; align-items: baseline; padding: 8px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .banner .title { font-size: 16px; font-weight: 700; }
+  .banner .stat { color: var(--muted); font-size: 13px; }
+  .banner .stat b { color: var(--text); font-weight: 600; }
+  .stage { flex: 1; display: grid; grid-template-columns: 1fr 330px; gap: 12px; min-height: 0; }
+  .view { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 8px; }
+  .cams { flex: none; display: flex; flex-wrap: wrap; gap: 6px; }
+  .cams button, .controls button, .controls select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 11px; cursor: pointer; font: inherit; }
+  .cams button.active { border-color: var(--accent); color: #fff; background: rgba(79,140,255,.18); }
+  .cams .hint { color: var(--muted); font-size: 12px; align-self: center; margin-left: auto; }
+  .videos { flex: 1; min-height: 0; background: #000; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); display: grid; gap: 2px; }
+  .videos.single { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .videos.grid { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  .videos .cell { position: relative; background: #000; min-height: 0; }
+  .videos video { display: block; width: 100%; height: 100%; object-fit: contain; }
+  .videos .label { position: absolute; left: 8px; top: 6px; font-size: 12px; color: #fff; background: rgba(0,0,0,.55); padding: 2px 7px; border-radius: 4px; }
+  .timeline { flex: none; position: relative; height: 36px; border-radius: 6px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); cursor: pointer; }
+  .timeline .seg { position: absolute; top: 0; bottom: 0; opacity: .8; }
+  .timeline .seg span { position: absolute; left: 6px; top: 9px; font-size: 11px; font-weight: 700; color: #08101a; white-space: nowrap; overflow: hidden; max-width: calc(100% - 8px); }
+  .timeline .mark { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.55); }
+  .timeline .cursor { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; box-shadow: 0 0 6px #fff; pointer-events: none; }
+  .controls { flex: none; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .controls #play { min-width: 96px; font-weight: 600; }
+  .controls .time { font-variant-numeric: tabular-nums; color: var(--muted); margin-left: auto; }
+  .side { display: flex; flex-direction: column; gap: 10px; min-height: 0; min-width: 0; overflow-y: auto; padding-right: 2px; }
+  .card { flex: none; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .card h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-variant-numeric: tabular-nums; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  .phase-now { font-size: 20px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  .forces { display: grid; grid-template-columns: 44px 1fr 40px; gap: 3px 8px; align-items: center; font-variant-numeric: tabular-nums; font-size: 13px; }
+  .forces .bar { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .forces .bar i { display: block; height: 100%; background: var(--grasp); width: 0; transition: width .1s linear; }
+  .events { font-size: 12.5px; }
+  .events div { padding: 3px 0; border-bottom: 1px dashed var(--line); color: var(--muted); cursor: pointer; }
+  .events div.past { color: var(--text); }
+  .events div.now { color: #fff; background: rgba(79,140,255,.12); }
+  .events b { font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 6px; }
+  .perception img { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--line); }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; }
+  #content { display: contents; }
+  #content[hidden] { display: none; }
+  @media (max-width: 1100px) { html, body { overflow: auto; } .stage { grid-template-columns: 1fr; } .videos { min-height: 320px; } .side { overflow: visible; } }
+  @media (max-width: 760px) { body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Pick &amp; Place — Episodes</h1>
+  <div class="muted" style="font-size:12px">Ghi bằng <code>python -m scripts.record_episode</code></div>
+  <h2>Danh sách</h2>
+  <div id="episodes"></div>
+</aside>
+<main id="main">
+  <div class="empty" id="empty">Chưa có episode nào. Chạy <code>python -m scripts.record_episode --perception</code> rồi tải lại trang.</div>
+  <div id="content" hidden>
+    <div class="banner" id="banner"></div>
+    <div class="stage">
+      <div class="view">
+        <div class="cams" id="cams"></div>
+        <div class="videos single" id="videos"></div>
+        <div class="timeline" id="timeline"></div>
+        <div class="controls">
+          <button id="play">▶ Play</button>
+          <button id="restart">⟲ Xem lại</button>
+          <button id="back">−1s</button>
+          <button id="fwd">+1s</button>
+          <label class="muted">Tốc độ
+            <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+          </label>
+          <button id="layout">▦ 4 góc</button>
+          <span class="time" id="time">0.00 s</span>
+        </div>
+      </div>
+      <div class="side">
+        <div class="card">
+          <h3>Trạng thái</h3>
+          <div class="phase-now" id="phase">—</div>
+          <div class="kv" id="state"></div>
+        </div>
+        <div class="card">
+          <h3>Lực ngón tay (N)</h3>
+          <div class="forces" id="forces"></div>
+        </div>
+        <div class="card perception" id="perceptionCard" hidden>
+          <h3>Camera D435 lúc nhận diện</h3>
+          <img id="perception" alt="head camera detection">
+        </div>
+        <div class="card">
+          <h3>Nhật ký</h3>
+          <div class="events" id="events"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+(() => {
+  const ROOT = "../artifacts/episodes/";
+  const PHASE_COLORS = { perceive: "var(--perceive)", plan: "var(--plan)", ready: "var(--ready)", reach: "var(--reach)", grasp: "var(--grasp)", carry: "var(--carry)", release: "var(--release)" };
+  const CAMERA_LABELS = { isometric: "Toàn cảnh", d435_head: "Cam D435 (đầu)", overhead: "Từ trên", close_grasp: "Cận cảnh nắm", right_wrist_camera: "Cam cổ tay", front_view: "Trước", side_view: "Bên" };
+  const FINGERS = ["thumb", "index", "middle", "ring", "pinky"];
+  const FINGER_LABELS = { thumb: "cái", index: "trỏ", middle: "giữa", ring: "nhẫn", pinky: "út" };
+  const $ = (id) => document.getElementById(id);
+
+  let episode = null, videos = [], master = null, mainCamera = null, grid = false, raf = null;
+
+  async function loadIndex() {
+    let entries = [];
+    try { entries = await (await fetch(ROOT + "index.json", { cache: "no-store" })).json(); } catch (e) { entries = []; }
+    const list = $("episodes"); list.innerHTML = "";
+    for (const entry of entries) {
+      const button = document.createElement("button");
+      button.className = "episode"; button.dataset.name = entry.name;
+      const pill = entry.passed ? '<span class="pill ok">PASS</span>' : '<span class="pill bad">FAIL</span>';
+      const lay = entry.layout || {};
+      button.innerHTML = `<div class="name">${entry.name}${pill}</div>
+        <div class="sub">${(entry.recorded_at || "").replace("T", " ")} · ${entry.duration_s ?? "?"} s · đặt sai ${entry.placement_error_mm ?? "?"} mm</div>
+        <div class="sub">A ${fmtXY(lay.object)} → B ${fmtXY(lay.basket)}${lay.perception ? " · RGB-D" : ""}</div>`;
+      button.onclick = () => openEpisode(entry.name);
+      list.appendChild(button);
+    }
+    if (entries.length) {
+      const wanted = location.hash.slice(1);
+      openEpisode(entries.some(e => e.name === wanted) ? wanted : entries[0].name);
+    }
+  }
+
+  const fmtXY = (p) => p ? `(${p[0].toFixed(2)}, ${p[1].toFixed(2)})` : "?";
+
+  async function openEpisode(name) {
+    episode = await (await fetch(`${ROOT}${name}/episode.json`, { cache: "no-store" })).json();
+    location.hash = name;
+    document.querySelectorAll(".episode").forEach(b => b.classList.toggle("active", b.dataset.name === name));
+    $("empty").hidden = true; $("content").hidden = false;
+    renderBanner(); renderCameras(); renderVideos(); renderTimeline(); renderEvents(); renderPerception(); renderForcesSkeleton();
+    update(0);
+  }
+
+  function renderBanner() {
+    const r = episode.result, lay = episode.layout;
+    const pill = r.passed ? '<span class="pill ok">PASS</span>' : `<span class="pill bad">FAIL · ${r.failed_phase || ""}</span>`;
+    const stats = [
+      ["đặt sai", `${r.placement_error_mm} mm`], ["nghiêng cuối", `${r.final_tilt_deg}°`],
+      r.perception_error_mm != null ? ["nhận diện sai", `${r.perception_error_mm} mm`] : null,
+      r.grasp_yaw_deg != null ? ["hướng nắm", `${r.grasp_yaw_deg}°`] : null,
+      r.place_yaw_deg != null ? ["hướng đặt", `${r.place_yaw_deg}°`] : null,
+      ["thời lượng", `${episode.duration_s} s`], ["ghi mất", `${episode.wall_seconds} s`],
+    ].filter(Boolean);
+    $("banner").innerHTML = `<span class="title">${episode.name}${pill}</span>
+      <span class="stat">A ${fmtXY(lay.object)} → B ${fmtXY(lay.basket)}${lay.perception ? " · RGB-D" : " · ground truth"}</span>`
+      + stats.map(([k, v]) => `<span class="stat">${k} <b>${v}</b></span>`).join("")
+      + (r.failure ? `<span class="stat" style="color:var(--bad)">${r.failure}</span>` : "");
+  }
+
+  function renderCameras() {
+    const box = $("cams"); box.innerHTML = "";
+    if (!episode.cameras.includes(mainCamera)) mainCamera = episode.cameras[0];
+    episode.cameras.forEach((camera, i) => {
+      const b = document.createElement("button");
+      b.textContent = `${i + 1} · ${CAMERA_LABELS[camera] || camera}`;
+      b.classList.toggle("active", camera === mainCamera);
+      b.onclick = () => { mainCamera = camera; renderCameras(); renderVideos(); };
+      box.appendChild(b);
+    });
+    const hint = document.createElement("span"); hint.className = "hint";
+    hint.textContent = "Space: play/pause · ←/→: ±1 s · phím 1–5: đổi góc · kéo trên thanh thời gian để tua";
+    box.appendChild(hint);
+  }
+
+  function renderVideos() {
+    const t = master ? master.currentTime : 0, wasPlaying = master && !master.paused;
+    const box = $("videos"); box.innerHTML = ""; videos = [];
+    const cameras = grid ? [mainCamera, ...episode.cameras.filter(c => c !== mainCamera)].slice(0, 4) : [mainCamera];
+    box.className = "videos " + (grid ? "grid" : "single");
+    for (const camera of cameras) {
+      const cell = document.createElement("div"); cell.className = "cell";
+      const v = document.createElement("video");
+      v.src = `${ROOT}${episode.name}/${camera}.mp4`; v.preload = "auto"; v.muted = true; v.playsInline = true;
+      cell.appendChild(v);
+      const label = document.createElement("span"); label.className = "label"; label.textContent = CAMERA_LABELS[camera] || camera;
+      cell.appendChild(label); box.appendChild(cell); videos.push(v);
+    }
+    master = videos[0];
+    master.playbackRate = parseFloat($("speed").value);
+    videos.forEach(v => { v.playbackRate = master.playbackRate; v.currentTime = t; });
+    master.onplay = () => { videos.slice(1).forEach(v => { v.currentTime = master.currentTime; v.play(); }); tick(); $("play").textContent = "❚❚ Pause"; };
+    master.onpause = () => { videos.slice(1).forEach(v => v.pause()); cancelAnimationFrame(raf); $("play").textContent = "▶ Play"; update(master.currentTime); };
+    master.onended = () => { $("play").textContent = "▶ Play"; };
+    master.onseeked = () => { videos.slice(1).forEach(v => { v.currentTime = master.currentTime; }); update(master.currentTime); };
+    if (wasPlaying) master.play();
+  }
+
+  function tick() {
+    if (!master || master.paused) return;
+    // keep the other views on the master's clock
+    for (const v of videos.slice(1)) if (Math.abs(v.currentTime - master.currentTime) > 0.08) v.currentTime = master.currentTime;
+    update(master.currentTime);
+    raf = requestAnimationFrame(tick);
+  }
+
+  function seek(t) {
+    t = Math.max(0, Math.min(episode.duration_s, t));
+    videos.forEach(v => { v.currentTime = t; });
+    update(t);
+  }
+
+  function renderTimeline() {
+    const box = $("timeline"); box.innerHTML = "";
+    const total = episode.duration_s || 1;
+    const phases = episode.events.filter(e => e.kind === "phase");
+    phases.forEach((e, i) => {
+      const end = i + 1 < phases.length ? phases[i + 1].t : total;
+      const seg = document.createElement("div"); seg.className = "seg";
+      seg.style.left = `${100 * e.t / total}%`; seg.style.width = `${100 * (end - e.t) / total}%`;
+      seg.style.background = PHASE_COLORS[e.phase] || "#888";
+      seg.innerHTML = `<span>${e.phase}</span>`; seg.title = `${e.phase} ${e.t.toFixed(2)}–${end.toFixed(2)} s`;
+      box.appendChild(seg);
+    });
+    for (const e of episode.events.filter(e => e.kind === "note")) {
+      const m = document.createElement("div"); m.className = "mark"; m.style.left = `${100 * e.t / total}%`; m.title = `${e.t.toFixed(2)} s: ${e.message}`;
+      box.appendChild(m);
+    }
+    const cursor = document.createElement("div"); cursor.className = "cursor"; cursor.id = "cursor"; box.appendChild(cursor);
+    let dragging = false;
+    const toTime = (ev) => { const r = box.getBoundingClientRect(); return total * Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)); };
+    box.onpointerdown = (ev) => { dragging = true; box.setPointerCapture(ev.pointerId); seek(toTime(ev)); };
+    box.onpointermove = (ev) => { if (dragging) seek(toTime(ev)); };
+    box.onpointerup = () => { dragging = false; };
+  }
+
+  function renderEvents() {
+    const box = $("events"); box.innerHTML = "";
+    episode.events.forEach((e, i) => {
+      const d = document.createElement("div"); d.dataset.t = e.t; d.dataset.i = i;
+      d.innerHTML = `<b>${e.t.toFixed(2)}s</b>${e.kind === "phase" ? `<strong>${e.phase.toUpperCase()}</strong>: ` : ""}${e.message}`;
+      d.style.cursor = "pointer"; d.onclick = () => seek(e.t);
+      box.appendChild(d);
+    });
+  }
+
+  function renderPerception() {
+    const card = $("perceptionCard");
+    if (episode.perception_image) { $("perception").src = `${ROOT}${episode.name}/${episode.perception_image}`; card.hidden = false; }
+    else card.hidden = true;
+  }
+
+  function renderForcesSkeleton() {
+    $("forces").innerHTML = FINGERS.map(f => `<span class="muted">${FINGER_LABELS[f]}</span><div class="bar"><i id="bar-${f}"></i></div><span id="val-${f}">0.0</span>`).join("");
+  }
+
+  function frameAt(t) {
+    const ts = episode.telemetry.t; let lo = 0, hi = ts.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ts[mid] <= t) lo = mid; else hi = mid - 1; }
+    return lo;
+  }
+
+  function update(t) {
+    if (!episode) return;
+    $("time").textContent = `${t.toFixed(2)} s / ${episode.duration_s.toFixed(2)} s`;
+    $("cursor").style.left = `${100 * t / (episode.duration_s || 1)}%`;
+    const i = frameAt(t), tel = episode.telemetry;
+    const phase = tel.phase[i] || "—";
+    $("phase").textContent = phase; $("phase").style.color = PHASE_COLORS[phase] || "var(--text)";
+    const o = tel.object[i], w = tel.wrist[i], B = episode.layout.basket;
+    const dist = o ? Math.hypot(o[0] - B[0], o[1] - B[1]) * 1000 : NaN;
+    $("state").innerHTML = [
+      ["vật (x, y, z)", o ? o.map(v => v.toFixed(3)).join(", ") : "?"],
+      ["nghiêng", `${tel.object_tilt_deg[i]}°`],
+      ["vật → rổ", `${dist.toFixed(0)} mm`],
+      ["cổ tay (x, y, z)", w ? w.map(v => v.toFixed(3)).join(", ") : "?"],
+    ].map(([k, v]) => `<span class="k">${k}</span><span>${v}</span>`).join("");
+    const f = tel.forces[i] || [0, 0, 0, 0, 0];
+    FINGERS.forEach((name, k) => { $(`bar-${name}`).style.width = `${Math.min(100, f[k] / 60 * 100)}%`; $(`val-${name}`).textContent = f[k].toFixed(1); });
+    let nowRow = null;
+    document.querySelectorAll("#events div").forEach(d => {
+      const past = parseFloat(d.dataset.t) <= t + 1e-6; d.classList.toggle("past", past); d.classList.remove("now");
+      if (past) nowRow = d;
+    });
+    if (nowRow) { nowRow.classList.add("now"); if (master && !master.paused) nowRow.scrollIntoView({ block: "nearest" }); }
+  }
+
+  $("play").onclick = () => { if (!master) return; master.paused ? master.play() : master.pause(); };
+  $("restart").onclick = () => { seek(0); master && master.play(); };
+  $("back").onclick = () => master && seek(master.currentTime - 1);
+  $("fwd").onclick = () => master && seek(master.currentTime + 1);
+  $("speed").onchange = () => videos.forEach(v => { v.playbackRate = parseFloat($("speed").value); });
+  $("layout").onclick = () => { grid = !grid; $("layout").textContent = grid ? "▢ 1 góc" : "▦ 4 góc"; renderVideos(); };
+  document.addEventListener("keydown", (ev) => {
+    if (!master || ev.target.tagName === "SELECT") return;
+    if (ev.code === "Space") { ev.preventDefault(); $("play").click(); }
+    if (ev.code === "ArrowLeft") seek(master.currentTime - (ev.shiftKey ? 0.1 : 1));
+    if (ev.code === "ArrowRight") seek(master.currentTime + (ev.shiftKey ? 0.1 : 1));
+    if (ev.key >= "1" && ev.key <= "9") { const c = episode.cameras[ev.key - 1]; if (c) { mainCamera = c; renderCameras(); renderVideos(); } }
+  });
+
+  loadIndex();
+})();
+</script>
+</body>
+</html>
