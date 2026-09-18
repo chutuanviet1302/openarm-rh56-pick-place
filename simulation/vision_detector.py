@@ -4,9 +4,16 @@ from dataclasses import dataclass
 
 import mujoco
 import numpy as np
+from scipy import ndimage
 from PIL import Image, ImageDraw
 
-from simulation.five_finger_model import OBJECT_HALF_HEIGHT, OBJECT_RADIUS, TABLE_TOP_Z
+from simulation.five_finger_model import TABLE_TOP_Z, OBJECT_HALF_HEIGHT, OBJECT_RADIUS
+
+# Table-plane grid cell for grouping depth points into objects (footprint estimate).
+FOOTPRINT_CELL_M = 0.005
+# A depth step this large between neighbouring pixels marks a silhouette edge.
+DEPTH_EDGE_JUMP_M = 0.02
+
 
 
 @dataclass
@@ -22,11 +29,15 @@ class ObjectDetectionResult:
 
 
 def red_mask(rgb: np.ndarray) -> np.ndarray:
-    """Pixels where red clearly dominates: the soup can's label against a wood table."""
+    """Pixels where red clearly dominates: the soup can's label against a wood table.
+
+    Dominance, not brightness, is the criterion: seen from the head camera 0.8m up the
+    label's side is lit at a grazing angle and its brightest red is only ~95/255,
+    while the beige table top (r/g = 1.1) and the wooden legs (1.3) stay excluded."""
     r = rgb[:, :, 0].astype(np.float32)
     g = rgb[:, :, 1].astype(np.float32)
     b = rgb[:, :, 2].astype(np.float32)
-    return (r > 100) & (r > 1.4 * g) & (r > 1.4 * b)
+    return (r > 60) & (r > 1.4 * g) & (r > 1.4 * b)
 
 
 def fit_circle_known_radius(points_xy: np.ndarray, radius: float, initial: np.ndarray, iterations: int = 20) -> np.ndarray:
@@ -37,7 +48,12 @@ def fit_circle_known_radius(points_xy: np.ndarray, radius: float, initial: np.nd
     with Gauss-Newton pulls the centre back to where a cylinder of the known radius
     actually has to be to show that surface.
     """
-    centre = np.asarray(initial, dtype=float).copy()
+    # Algebraic circle fit gives the correct side of a partial arc more reliably than
+    # a centroid offset; the known-radius Gauss-Newton pass then removes radius drift.
+    matrix = np.column_stack((2.0 * points_xy, np.ones(len(points_xy))))
+    rhs = np.sum(points_xy**2, axis=1)
+    algebraic = np.linalg.lstsq(matrix, rhs, rcond=None)[0][:2]
+    centre = algebraic if np.all(np.isfinite(algebraic)) else np.asarray(initial, dtype=float).copy()
     for _ in range(iterations):
         delta = points_xy - centre
         distance = np.linalg.norm(delta, axis=1)
@@ -88,6 +104,71 @@ class VisionDetector:
         rotation = data.cam_xmat[self.cam_id].reshape(3, 3)
         return camera_points @ rotation.T + data.cam_xpos[self.cam_id]
 
+    def _lid_centre(self, data: mujoco.MjData, depth: np.ndarray, rows: np.ndarray, columns: np.ndarray,
+                    guess_xy: np.ndarray) -> np.ndarray | None:
+        """Centre of the object's footprint from the depth points near the colour-based
+        guess; None if too few are seen."""
+        margin = 3 * max(int(0.5 * (columns.max() - columns.min())), 4)
+        r0, r1 = max(rows.min() - margin, 0), min(rows.max() + margin, depth.shape[0] - 1)
+        c0, c1 = max(columns.min() - margin, 0), min(columns.max() + margin, depth.shape[1] - 1)
+        window_rows, window_columns = np.mgrid[r0 : r1 + 1, c0 : c1 + 1]
+        window_depth = depth[r0 : r1 + 1, c0 : c1 + 1]
+        valid = np.isfinite(window_depth) & (window_depth > 0)
+        # Drop silhouette pixels: their depth is blended between the object and what
+        # lies behind it, so they deproject to phantom points in mid-air that bridge
+        # the gap to a neighbouring surface (the basket wall 3cm away merged with the
+        # can through them) and drag the far extent outward.
+        jump = np.zeros_like(valid)
+        diff = np.abs(np.diff(window_depth, axis=0)) > DEPTH_EDGE_JUMP_M
+        jump[:-1] |= diff
+        jump[1:] |= diff
+        diff = np.abs(np.diff(window_depth, axis=1)) > DEPTH_EDGE_JUMP_M
+        jump[:, :-1] |= diff
+        jump[:, 1:] |= diff
+        valid &= ~jump
+        points = self.deproject(
+            data, window_rows[valid].astype(float), window_columns[valid].astype(float), window_depth[valid].astype(float)
+        )
+        # Every visible object point (lid, rim and side) projects inside the can's
+        # footprint disc, and the rim -- seen whole from above -- reaches its edge, so
+        # the disc's centre is the midpoint of the point cloud's x and y extents.
+        # Which points are the can's: the colour mask is on its surface for certain, so
+        # bin the above-table points on a table-plane grid and keep the cells connected
+        # to the coloured ones. A radius around the colour guess does not do -- the
+        # guess sits up to 3cm off the axis, and the basket wall or a hanging fist a
+        # few cm away would be swept in and skew the extents by 1-2cm.
+        above_table = points[:, 2] > TABLE_TOP_Z + 0.04
+        window = valid.copy()
+        window[valid] = above_table
+        xy = points[above_table, :2]
+        keep = valid[rows - r0, columns - c0]
+        seed_xy = self.deproject(
+            data, rows[keep].astype(float), columns[keep].astype(float), depth[rows[keep], columns[keep]].astype(float)
+        )[:, :2]
+        if seed_xy.shape[0] < 10:
+            return None
+        cell = FOOTPRINT_CELL_M
+        origin = np.minimum(xy.min(axis=0), seed_xy.min(axis=0)) - cell
+        shape = tuple(int(v) + 3 for v in (np.maximum(xy.max(axis=0), seed_xy.max(axis=0)) - origin) / cell)
+        grid = np.zeros(shape, dtype=bool)
+        cells = ((xy - origin) / cell).astype(int)
+        grid[cells[:, 0], cells[:, 1]] = True
+        labels, _ = ndimage.label(grid, structure=np.ones((3, 3)))
+        seed_cells = ((seed_xy - origin) / cell).astype(int)
+        seed_labels = np.unique(labels[seed_cells[:, 0], seed_cells[:, 1]])
+        seed_labels = seed_labels[seed_labels > 0]
+        if seed_labels.size == 0:
+            return None
+        on_object = np.isin(labels[cells[:, 0], cells[:, 1]], seed_labels)
+        if on_object.sum() < 30:
+            return None
+        xy = xy[on_object]
+        # Percentile extents rather than min/max: silhouette-edge pixels carry a depth
+        # blended between can and table and deproject to phantom points in mid-air
+        # beyond the far side, which would drag the far extent outward.
+        low, high = np.percentile(xy, [2.0, 98.0], axis=0)
+        return 0.5 * (low + high)
+
     def detect_object(self, data: mujoco.MjData, render_annotation: bool = True) -> ObjectDetectionResult:
         self.renderer.update_scene(data, camera=self.camera_name)
         rgb = self.renderer.render().copy()
@@ -120,6 +201,13 @@ class VisionDetector:
         away = centroid - camera_xy
         away /= max(np.linalg.norm(away), 1e-9)
         centre_xy = fit_circle_known_radius(surface_xy, OBJECT_RADIUS, centroid + 0.5 * OBJECT_RADIUS * away)
+        # The label arc the colour mask sees is not symmetric about the viewing
+        # direction (shading drops one side below the red threshold), which biases the
+        # circle fit sideways by several mm. From the head camera the whole footprint
+        # is in view in depth, and its extents locate the axis directly: prefer that.
+        lid_xy = self._lid_centre(data, depth, rows, columns, centre_xy)
+        if lid_xy is not None:
+            centre_xy = lid_xy
         pos_world = np.array([centre_xy[0], centre_xy[1], centre_z])
 
         u_center, v_center = int(np.mean(columns)), int(np.mean(rows))
