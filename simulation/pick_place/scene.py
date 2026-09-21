@@ -20,6 +20,7 @@ from simulation.pick_place.config import (
     CARRY_CLEARANCE_ABOVE_RIM,
     EE_SITE,
     FINGER_NAMES,
+    GRASP_CLOSURE_FRACTION,
     OBJECT_GEOM,
     TABLE_CONTACT_TOLERANCE,
 )
@@ -36,7 +37,9 @@ class Scene:
         self.data = mujoco.MjData(self.model)
         # The grasp orientation is whatever the hand has when the wrist is straight in
         # the reference posture -- a natural, in-line hand, not a hand-tuned rotation.
-        _, self.grasp_orientation = natural_grasp_frame(self.model)
+        self.grasp_orientation = {
+            side: natural_grasp_frame(self.model, side)[1] for side in ("left", "right")
+        }
         self._index_arms_and_hands()
         self._index_fingers()
 
@@ -93,6 +96,17 @@ class Scene:
                     continue
                 if tail.startswith("thumb_proximal"):
                     # Flexion: the thumb's closing DOF; equalities carry it to the other knuckles.
+                    #
+                    # The limit, even though the thumb's arc carries its tip *across* the
+                    # opposing fingers: swept free of any object the jaw narrows to 58mm at
+                    # flexion 0.40 and widens again to 63mm at the limit, and a thumb pressing
+                    # an object past that peak does lose force as it closes (measured mid-carry,
+                    # 16N -> 10N -> released). Stopping it at the peak is worse, not better:
+                    # these are position servos, so the squeeze *is* the commanded overshoot
+                    # into the object, and a thumb told to stop where it can already reach
+                    # presses with nothing (tried: 17/20 -> 10/20, objects dropped on the lift).
+                    # Closing is force-driven anyway -- close_until_contact stops each finger on
+                    # its contact force, long before the limit.
                     self.finger_actuator[side]["thumb"] = int(actuator)
                     self.open_ctrl[side]["thumb"] = float(lower)
                     self.closed_ctrl[side]["thumb"] = float(upper)
@@ -103,6 +117,42 @@ class Scene:
                 self.open_ctrl[side][tail] = float(self.open_hand[side][position])
                 # Closing drives to full curl and lets contact force stop the finger.
                 self.closed_ctrl[side][tail] = float(upper)
+
+    def jaw_offsets_at(self, side: str, thumb_flexion: float | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """(four-finger tip centroid, thumb tip), in the wrist frame, with the hand
+        pre-shaped for a grasp: thumb opposed, fingers part closed. `thumb_flexion`
+        overrides the thumb's closing DOF; by default it takes the same pre-shape as
+        the fingers. Kinematics only -- no physics step, no contact."""
+        model = self.model
+        data = mujoco.MjData(model)
+        for name, actuator in self.finger_actuator[side].items():
+            joint = model.actuator_trnid[actuator, 0]
+            opened, closed = self.open_ctrl[side][name], self.closed_ctrl[side][name]
+            value = opened + GRASP_CLOSURE_FRACTION * (closed - opened)
+            if name == "thumb" and thumb_flexion is not None:
+                value = thumb_flexion
+            data.qpos[model.jnt_qposadr[joint]] = value
+        yaw_actuator, _, opposed = self.thumb_yaw[side]
+        data.qpos[model.jnt_qposadr[model.actuator_trnid[yaw_actuator, 0]]] = opposed
+        # Apply the hand's coupled-joint equalities by hand (no physics step here).
+        for equality in range(model.neq):
+            if model.eq_type[equality] != mujoco.mjtEq.mjEQ_JOINT:
+                continue
+            driven, source = int(model.eq_obj1id[equality]), int(model.eq_obj2id[equality])
+            if not (model.joint(driven).name or "").startswith(f"{HAND_PREFIX}{side}_"):
+                continue
+            source_value = data.qpos[model.jnt_qposadr[source]]
+            value = sum(float(c) * source_value**power for power, c in enumerate(model.eq_data[equality, :5]))
+            data.qpos[model.jnt_qposadr[driven]] = np.clip(value, *model.jnt_range[driven])
+        mujoco.mj_forward(model, data)
+        site = self.ee_site_id[side]
+        wrist, rotation = data.site_xpos[site].copy(), data.site_xmat[site].reshape(3, 3)
+        tips = [
+            data.site_xpos[model.site(f"{HAND_PREFIX}{side}_{side}_{finger}_tip").id]
+            for finger in ("index", "middle", "ring", "pinky")
+        ]
+        thumb = data.site_xpos[model.site(f"{HAND_PREFIX}{side}_{side}_thumb_tip").id]
+        return rotation.T @ (np.mean(tips, axis=0) - wrist), rotation.T @ (thumb - wrist)
 
     def reset(self) -> None:
         """Pose the scene at the start of an episode: attention stance, fists closed."""

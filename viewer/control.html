@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenArm Trajectory Studio</title>
+  <link rel="stylesheet" href="control.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">OPENARM · RH56 · MUJOCO</p>
+      <h1>Trajectory Studio</h1>
+      <p>Chọn PICK và PLACE; hệ thống kiểm tra IK để tự chọn tay phải, tay trái hoặc handoff.</p>
+    </header>
+    <section class="workspace">
+      <div class="map-panel">
+        <div class="stage-head"><b>02 / Vùng thao tác hai tay</b><span id="map-mode">PICK MAP</span></div>
+        <div class="legend"><span class="reachable-dot"></span> Tay phải <span>🔵 Tay trái</span> <span class="unreachable-dot"></span> Ngoài tầm <span class="base-dot"></span> Đế robot</div>
+        <canvas id="table" width="900" height="560" aria-label="Mặt bàn để chọn vị trí vật và rổ"></canvas>
+        <p class="hint">Kéo hai điểm hoặc nhấp vào điểm cần di chuyển rồi chọn vị trí mới.</p>
+      </div>
+      <form id="controls">
+        <p class="section-label">01 / Cấu hình trajectory</p>
+        <h2>Tọa độ PICK / PLACE</h2>
+        <div class="selector" aria-label="Điểm thao tác">
+          <button id="select-object" type="button" class="active">PICK · Vật</button>
+          <button id="select-basket" type="button">PLACE · Rổ</button>
+        </div>
+        <fieldset>
+          <legend>Vật</legend>
+          <label>X <input id="object-x" type="number" min="-0.25" max="0.75" step="0.01" value="0.08"></label>
+          <label>Y <input id="object-y" type="number" min="-0.55" max="0.55" step="0.01" value="-0.38"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Rổ</legend>
+          <label>X <input id="basket-x" type="number" min="-0.25" max="0.75" step="0.01" value="0.25"></label>
+          <label>Y <input id="basket-y" type="number" min="-0.55" max="0.55" step="0.01" value="-0.25"></label>
+        </fieldset>
+        <div class="readout">
+          <span>Vật cách gốc <b id="object-distance">—</b></span>
+          <span>Rổ cách gốc <b id="basket-distance">—</b></span>
+          <span>Khoảng A → B <b id="pair-distance">—</b></span>
+        </div>
+        <div id="layout-state" class="valid">BỐ TRÍ HỢP LỆ</div>
+        <button type="submit">Tạo trajectory</button>
+        <div id="status" role="status">Sẵn sàng.</div>
+        <a id="result" hidden>Mở kết quả MuJoCo →</a>
+      </form>
+    </section>
+  </main>
+  <script src="control.js"></script>
+</body>
+</html>

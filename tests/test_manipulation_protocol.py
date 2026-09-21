@@ -18,6 +18,7 @@ from simulation.pick_place_demo import (
     run_trial,
     sample_layout,
 )
+from simulation.pick_place.planner import GraspPlanner
 from simulation.vision_detector import VisionDetector, fit_circle_known_radius
 
 
@@ -47,6 +48,7 @@ class PerceptionTests(unittest.TestCase):
             # The floor-plane assumption fixes z; it must agree with where the can really is.
             self.assertAlmostEqual(float(result.pos_world[2]), float(truth[2]), delta=0.002)
         self.assertLess(max(errors), 0.01, f"worst xy error {max(errors)*1000:.1f}mm")
+        self.assertLessEqual(np.percentile(errors, 95), 0.005, f"P95 xy error {np.percentile(errors, 95)*1000:.1f}mm")
 
     def test_detector_does_not_read_object_state(self):
         # The old detector "estimated" the position by copying data.xpos of the object.
@@ -66,6 +68,13 @@ class PerceptionTests(unittest.TestCase):
 
 
 class RandomizationTests(unittest.TestCase):
+    def test_cross_table_transfer_adds_base_detours(self):
+        routes = GraspPlanner.transfer_route_candidates(
+            np.array([0.15, -0.35, 0.30]), np.array([0.15, 0.35, 0.30])
+        )
+        self.assertEqual([name for name, _ in routes], ["direct", "detour_left", "detour_right"])
+        self.assertTrue(all(len(points) == 3 for _, points in routes[1:]))
+
     def test_object_to_basket_distance_measures_to_the_wall(self):
         from simulation.five_finger_model import BASKET_HALF_WIDTH, BASKET_WALL_THICKNESS
 

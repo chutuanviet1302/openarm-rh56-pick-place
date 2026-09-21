@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import mujoco
@@ -12,7 +13,10 @@ from openarm_pick_place.models import Pose
 # is self-contained. Differences from v2 that matter here: the link chain runs along
 # +z, joint6/joint7 are the x/y wrist bend axes (swapped vs v2), the tool axis is +z
 # of link7 (no ee_base_link body), and the arm actuators are torque motors.
-OPENARM_V1_DIR = Path(__file__).resolve().parent.parent / "assets" / "openarm_v1"
+_PROJECT_ROOT = Path(os.environ.get("OPENARM_PROJECT_ROOT", Path(__file__).resolve().parent.parent))
+if not (_PROJECT_ROOT / "assets/openarm_v1/scene.xml").is_file():
+    _PROJECT_ROOT = Path.cwd()
+OPENARM_V1_DIR = _PROJECT_ROOT / "assets" / "openarm_v1"
 MODEL_RELATIVE_PATH = Path("scene.xml")
 LEFT_ARM_ACTUATORS = tuple(f"left_joint{joint}_ctrl" for joint in range(1, 8))
 LEFT_EE_SITE = "left_ee_control_point"
@@ -52,7 +56,9 @@ def configure_arm_servos(spec: mujoco.MjSpec) -> None:
             name = f"{side}_joint{index}_ctrl"
             joint = spec.joint(f"openarm_{side}_joint{index}")
             gains = SERVO_GAINS[motor_class]
-            joint.damping = [gains["damping"], 0.0, 0.0]
+            # MuJoCo 3.13 exposes damping as a fixed-size array even for a
+            # scalar hinge. Change only the hinge's active axis.
+            joint.damping[0] = gains["damping"]
             joint.armature = gains["armature"]
             joint.frictionloss = gains["frictionloss"]
             actuator = spec.actuator(name)

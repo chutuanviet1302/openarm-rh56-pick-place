@@ -15,6 +15,7 @@ setup(
         "console_scripts": [
             "d435_perception = openarm_pick_place.ros2_nodes:perception_main",
             "motion_planning = openarm_pick_place.ros2_nodes:motion_main",
+            "mujoco_bridge = openarm_pick_place.mujoco_bridge:main",
         ]
     },
 )

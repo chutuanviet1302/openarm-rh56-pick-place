@@ -10,6 +10,37 @@ Inspire RH56DFX nhận `custom_ros_messages/MotorCmds` qua `/hands/cmd`, đúng 
 
 Yêu cầu ROS 2, `realsense2_camera`, `cv_bridge`, MoveIt 2 và controller hỗ trợ `FollowJointTrajectory`.
 
+Môi trường WSL2 đã kiểm tra ngày 21/09/2026 nằm hoàn toàn trên `D:\WSL\Ubuntu-22.04` (không dùng dung lượng ổ C): ROS 2 Humble Desktop, MoveIt2, RViz2, RealSense, ros2_control và `~/ros2_ws`. Workspace dùng các revision:
+
+- `enactic/openarm_ros2`: `4e837e1d0dae692ff67b560b69d8d281d7a8d4ed`
+- `enactic/openarm_description`: `14ff67b638ff1c738a1b9a6be8aaa5ce5ed2c831`
+- `enactic/openarm_can`: `f340d4b808fb177e1f297af54eb55fd51c6c7c10`
+
+Repo này được symlink vào `~/ros2_ws/src/openarm_pick_place`; stub message nằm tại `~/ros2_ws/src/custom_ros_messages`. Build và chạy demo tay v1.0:
+
+```bash
+source /opt/ros/humble/setup.bash
+cd ~/ros2_ws
+colcon build --symlink-install
+source install/setup.bash
+ros2 launch openarm_bimanual_moveit_config demo.launch.py \
+  arm_type:=openarm_v1.0 use_fake_hardware:=true
+
+# Robot MuJoCo headless đóng vai ros2_control (chạy từ gốc repo)
+ros2 run openarm_pick_place mujoco_bridge --ros-args \
+  -p config_path:=$PWD/config.example.json
+```
+
+WSLg render qua D3D12 (cả Intel và NVIDIA) thường gây lỗi màn hình đen, đơ hoặc crash trên Ogre/RViz2. `demo.launch.py` được cấu hình ép dùng `LIBGL_ALWAYS_SOFTWARE=1` (llvmpipe) và `QT_QPA_PLATFORM=xcb` để đảm bảo hiển thị 3D ổn định tuyệt đối, không bị treo hay văng.
+
+Nếu đóng terminal/cửa sổ RViz thay vì Ctrl+C, `ros2_control_node`/`move_group`/`rviz2` có thể sống sót thành tiến trình mồ côi. Lần `ros2 launch` kế tiếp sẽ tạo ra **hai** node `controller_manager` tranh nhau trên cùng DDS domain: spawner báo `Controller already loaded, skipping load_controller` rồi `Failed to configure controller`, và RViz không hiển thị gì cập nhật dù không crash. Dọn bằng:
+
+```bash
+bash scripts/kill_ros2_stack.sh
+```
+
+rồi chạy lại `ros2 launch` từ đầu.
+
 ```bash
 cp config.example.json config.json
 colcon build --symlink-install
@@ -52,7 +83,11 @@ Robot của lab là **OpenArm v1** (mentor xác nhận 18/09). MJCF v1 lấy t�
 un_gui.bat --camera isometric        # isometric | close_grasp | front_view | side_view | overhead | free
 
 # Headless: N trial vật lý, ghi artifacts/physics_trials.json
-.\.venv\Scripts\python.exe -m simulation.pick_place_demo --headless --trials 3
+.\.venv\Scripts\python.exe -m simulation.pick_place_demo --headless --trials 3 --arm auto
+
+# Benchmark gate 50 trial cho từng tay (báo cáo luôn nằm trên workspace ổ D)
+.\.venv\Scripts\python.exe -m scripts.benchmark_pick_place --arm right --trials 50 --perception
+.\.venv\Scripts\python.exe -m scripts.benchmark_pick_place --arm left --trials 50 --perception
 
 # Lấy vị trí vật từ camera đầu D435 (RGB-D → deprojection) thay vì trạng thái sim
 .\.venv\Scripts\python.exe -m simulation.pick_place_demo --headless --trials 3 --perception
@@ -86,7 +121,7 @@ Cấu trúc code (`simulation/pick_place/`): `config.py` (mọi tham số) → `
 
 1. Vật đứng trên mặt bàn (đáy mesh = đáy collision = `TABLE_TOP_Z`).
 2. Cổ tay thẳng tại grasp: hướng nắm là FK của `NATURAL_GRASP_JOINTS` (joint6 ≈ joint7 ≈ 0°), bàn tay nối tiếp cẳng tay; tay vươn về phía trước, lòng bàn tay hướng vào giữa.
-3. Cả 5 ngón có lực pháp tuyến ≥ 0.5 N trước khi nhấc.
+3. Grasp đối lực: ngón cái ≥ 6 N, ít nhất hai ngón còn lại ≥ 0.5 N và index/middle ≥ 1 N.
 4. Proof-lift: tay nâng ≥ 3 cm và vật trượt ≤ 1 cm so với tay.
 5. Đáy vật cao hơn mép rổ ≥ 5 cm khi mang; hạ xuống cách đáy rổ 3 cm rồi mới mở tay.
 6. Sai số đặt ≤ 2 cm, nghiêng ≤ 15° (góc trục z của vật với phương thẳng đứng).
@@ -95,7 +130,9 @@ Mỗi trial ghi đủ: bố cục A/B, vị trí perception + sai số so với 
 
 `simulation/five_finger_model.py` gắn model Inspire RH56 (6-DOF/12-joint) vào mỗi flange. Transform mount **suy ra từ hai hệ trục**, không tune tay: trục dụng cụ của OpenArm v1 là +z của `link7` (gripper gốc bắt vào mặt flange z = 0.0955); hệ trục gốc bàn tay Inspire có +z = hướng ngón, +x = lòng bàn tay. Bàn tay do đó nối tiếp cẳng tay (lệch 2.0°/2.9°), lòng bàn tay hướng vào thân, ngón cái phía trước khi tay buông thõng (phải: quay −90° quanh z; trái: +90°); đế tay đặt trên mặt flange qua tấm adapter 1 cm. Kiểm tra bằng `tests/test_mujoco.py::test_hands_continue_the_forearm_axis`. Tư thế nắm/tư thế chờ tham chiếu suy bằng `python -m scripts.sweep_postures` — chạy lại khi đổi model tay/cánh tay. Độ dày adapter là giả định — thay bằng CAD thật trước sim-to-real.
 
-`simulation/vision_detector.py` là pipeline perception trong sim (cùng cấu trúc với `openarm_pick_place/perception.py` trên robot thật): segment màu → depth → pinhole deprojection → camera→world → fit đường tròn bán kính đã biết; sai số đo được ≤ 5 mm trên 20 vị trí. Không đọc pose vật từ sim; không thấy vật thì trial fail vì perception.
+`simulation/vision_detector.py` là pipeline perception trong sim (cùng cấu trúc với `openarm_pick_place/perception.py` trên robot thật): segment màu → depth → pinhole deprojection → camera→world → fit đường tròn bán kính đã biết; gate là P95 ≤ 5 mm và max < 10 mm trên 20 vị trí. Không đọc pose vật từ sim; không thấy vật thì trial fail vì perception.
+
+Router hiện trả về `DIRECT_RIGHT`, `DIRECT_LEFT`, hai hướng `HANDOFF_*` hoặc `REJECTED` từ IK/collision preflight. Direct hai tay đã chạy vật lý; handoff chỉ được đưa vào executor sau khi tìm được side-grasp pose có khoảng hở giữa hai RH56. Không dùng weld/teleport để giả lập handoff.
 
 ## Trước khi nối phần cứng
 

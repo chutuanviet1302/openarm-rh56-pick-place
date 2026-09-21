@@ -17,7 +17,10 @@
   },
   "ros": {
     "joint_states": "/joint_states",
-    "arm_action": "/arm_controller/follow_joint_trajectory",
+    "arm_actions": {
+      "right": "/right_joint_trajectory_controller/follow_joint_trajectory",
+      "left": "/left_joint_trajectory_controller/follow_joint_trajectory"
+    },
     "compute_ik": "/compute_ik",
     "object_pose": "/perception/object_pose",
     "color_image": "/camera/camera/color/image_raw",
@@ -26,7 +29,26 @@
     "hand_command": "/hands/cmd"
   },
   "motion": {
-    "move_group": "openarm_right",
+    "default_arm": "right",
+    "arms": {
+      "right": {
+        "move_group": "right_arm",
+        "joint_names": [
+          "openarm_right_joint1", "openarm_right_joint2", "openarm_right_joint3",
+          "openarm_right_joint4", "openarm_right_joint5", "openarm_right_joint6",
+          "openarm_right_joint7"
+        ]
+      },
+      "left": {
+        "move_group": "left_arm",
+        "joint_names": [
+          "openarm_left_joint1", "openarm_left_joint2", "openarm_left_joint3",
+          "openarm_left_joint4", "openarm_left_joint5", "openarm_left_joint6",
+          "openarm_left_joint7"
+        ]
+      }
+    },
+    "move_group": "right_arm",
     "joint_names": [
       "openarm_right_joint1",
       "openarm_right_joint2",

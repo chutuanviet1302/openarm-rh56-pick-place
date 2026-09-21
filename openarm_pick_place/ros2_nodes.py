@@ -45,6 +45,26 @@ def _load(path: str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def motion_arm_config(config: dict, side: str) -> dict:
+    """Return one arm's MoveIt/action config, accepting the legacy right-only file."""
+    if side not in ("left", "right"):
+        raise ValueError("side must be left or right")
+    motion, topics = config["motion"], config["ros"]
+    if "arms" in motion:
+        arm = dict(motion["arms"][side])
+    elif side == "right":
+        arm = {"move_group": motion["move_group"], "joint_names": motion["joint_names"]}
+    else:
+        raise ValueError("legacy config only defines the right arm; add motion.arms.left")
+    actions = topics.get("arm_actions") or ({"right": topics["arm_action"]} if "arm_action" in topics else {})
+    if side not in actions:
+        raise ValueError(f"missing ROS trajectory action for {side} arm")
+    arm["action"] = actions[side]
+    if len(arm["joint_names"]) != 7:
+        raise ValueError("OpenArm command must contain exactly 7 joint names")
+    return arm
+
+
 def _quaternion_xyzw(rotation: np.ndarray) -> tuple[float, float, float, float]:
     matrix = np.asarray(rotation, dtype=float)
     trace = float(np.trace(matrix))
@@ -119,15 +139,15 @@ def motion_main(args=None) -> None:
             self.declare_parameter("config_path", "config.json")
             self.config = _load(self.get_parameter("config_path").value)
             cfg, topics = self.config["motion"], self.config["ros"]
-            if len(cfg["joint_names"]) != 7:
-                raise ValueError("OpenArm command must contain exactly 7 joint names")
+            self.side = cfg.get("default_arm", self.config["hand"].get("side", "right"))
+            self.arm_config = motion_arm_config(self.config, self.side)
             self.workspace = Workspace(np.array(self.config["workspace"]["minimum"]), np.array(self.config["workspace"]["maximum"]))
             self.grasp = GraspConfig(np.array(cfg["grasp_offset"]), np.array(cfg["approach_offset"]))
             self.place = Pose(np.array(cfg["place_position"]))
             self.buffer = ros["Buffer"]()
             self.listener = ros["TransformListener"](self.buffer, self)
             self.ik = self.create_client(ros["GetPositionIK"], topics["compute_ik"])
-            self.arm = ros["ActionClient"](self, ros["FollowJointTrajectory"], topics["arm_action"])
+            self.arm = ros["ActionClient"](self, ros["FollowJointTrajectory"], self.arm_config["action"])
             self.hand = self.create_publisher(ros["MotorCmds"], topics["hand_command"], 10)
             self.create_subscription(ros["PoseStamped"], topics["object_pose"], self._on_pose, 10)
             self.busy, self.solutions, self.names, self.seed = False, [], [], None
@@ -164,7 +184,7 @@ def motion_main(args=None) -> None:
                 self._execute([0, 1], lambda: (self._hand("grasp"), self._execute([2, 3, 4], lambda: (self._hand("open"), self._execute([5], self._done)))))
                 return
             request = ros["GetPositionIK"].Request()
-            request.ik_request.group_name = self.config["motion"]["move_group"]
+            request.ik_request.group_name = self.arm_config["move_group"]
             request.ik_request.avoid_collisions = True
             request.ik_request.pose_stamped = self._pose_message(self.waypoints[index])
             if self.seed is not None:
@@ -179,7 +199,7 @@ def motion_main(args=None) -> None:
             names, positions = response.solution.joint_state.name, response.solution.joint_state.position
             values = dict(zip(names, positions))
             try:
-                self.solutions.append([values[name] for name in self.config["motion"]["joint_names"]])
+                self.solutions.append([values[name] for name in self.arm_config["joint_names"]])
             except KeyError as error:
                 self._abort(f"IK response missing joint {error}")
                 return
@@ -199,7 +219,7 @@ def motion_main(args=None) -> None:
                 self._abort("arm trajectory action unavailable")
                 return
             goal = ros["FollowJointTrajectory"].Goal()
-            goal.trajectory.joint_names = self.config["motion"]["joint_names"]
+            goal.trajectory.joint_names = self.arm_config["joint_names"]
             for order, index in enumerate(indices, 1):
                 point = ros["JointTrajectoryPoint"]()
                 point.positions = self.solutions[index]
@@ -217,7 +237,7 @@ def motion_main(args=None) -> None:
 
         def _hand(self, state):
             message = ros["MotorCmds"]()
-            positions = inspire_command_positions(self.config["hand"][state], self.config["hand"]["side"])
+            positions = inspire_command_positions(self.config["hand"][state], self.side)
             for position in positions:
                 command = ros["MotorCmd"]()
                 command.mode = 0

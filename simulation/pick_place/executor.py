@@ -25,6 +25,7 @@ class Executor:
         self.viewer = viewer
         self._wall_anchor: float | None = None
         self._last_frame_time = -1.0
+        self.max_penetration_m = 0.0
         # Optional hook called after every physics step (used by --trace).
         self.on_step = on_step
 
@@ -39,10 +40,12 @@ class Executor:
     def _check_collisions(self) -> None:
         offenders = self.scene.support_contacts()
         if offenders:
+            self.max_penetration_m = max(self.max_penetration_m, max(-depth for depth in offenders.values()) / 1000.0)
             detail = ", ".join(f"{body} {depth:.1f}mm" for body, depth in sorted(offenders.items()))
             raise RuntimeError(f"trajectory aborted: {detail} inside the floor")
         offenders = self.scene.basket_contacts()
         if offenders:
+            self.max_penetration_m = max(self.max_penetration_m, max(-depth for depth in offenders.values()) / 1000.0)
             detail = ", ".join(f"{body} {depth:.1f}mm" for body, depth in sorted(offenders.items()))
             raise RuntimeError(f"trajectory aborted: {detail} colliding with the basket")
 
@@ -61,12 +64,7 @@ class Executor:
             now = time.perf_counter()
             ahead = self._wall_anchor + sim_time - now
             if ahead > 0.0:
-                # Windows sleep overshoots short frame deadlines; leave the last 1ms
-                # to a precise wait so motion does not alternate between stalls/bursts.
-                if ahead > 0.001:
-                    time.sleep(ahead - 0.001)
-                while time.perf_counter() < self._wall_anchor + sim_time:
-                    pass
+                time.sleep(ahead)
             elif ahead < -0.5:
                 self._wall_anchor = now - sim_time  # fell far behind: re-anchor, don't race
 
@@ -192,21 +190,21 @@ class Executor:
         return descended
 
     # ------------------------------------------------------------------ proof lift
-    def proof_lift(self, orientation: np.ndarray) -> tuple[float, float, float]:
+    def proof_lift(self, side: str, orientation: np.ndarray) -> tuple[float, float, float]:
         """Lift PROOF_LIFT_HEIGHT under physics. Returns (object rise, object tilt deg,
         hand rise). Nothing is welded: if the grip is not real the object stays put."""
         scene = self.scene
         object_before = float(scene.object_position()[2])
-        hand_before = float(scene.wrist_position("right")[2])
-        start = self.data.ctrl[scene.arm_actuators["right"]].copy()
+        hand_before = float(scene.wrist_position(side)[2])
+        start = self.data.ctrl[scene.arm_actuators[side]].copy()
         target = solve_pose_ik(
-            self.model, "right", scene.wrist_position("right") + np.array([0.0, 0.0, C.PROOF_LIFT_HEIGHT]),
+            self.model, side, scene.wrist_position(side) + np.array([0.0, 0.0, C.PROOF_LIFT_HEIGHT]),
             orientation, start,
         )
         steps = self.seconds_to_steps(C.PROOF_LIFT_SECONDS)
         for index in range(steps):
-            self.data.ctrl[scene.arm_actuators["right"]] = start + (target - start) * ((index + 1) / steps)
+            self.data.ctrl[scene.arm_actuators[side]] = start + (target - start) * ((index + 1) / steps)
             self._step()
         rise = float(scene.object_position()[2]) - object_before
-        hand_rise = float(scene.wrist_position("right")[2]) - hand_before
+        hand_rise = float(scene.wrist_position(side)[2]) - hand_before
         return rise, upright_tilt_degrees(scene.object_quaternion()), hand_rise

@@ -46,6 +46,16 @@ class TrialResult:
     phase_joint_targets: dict[str, list[float]] | None = None
     # Object position and wrist position observed at the end of each phase
     phase_observations: dict[str, dict[str, list[float]]] | None = None
+    route: str = "DIRECT_RIGHT"
+    source_arm: str = "right"
+    target_arm: str = "right"
+    handoff_pose: list[float] | None = None
+    handoff_forces: dict[str, float] | None = None
+    min_joint_margin_deg: float | None = None
+    max_penetration_m: float = 0.0
+    seed: int | None = None
+    trial_index: int | None = None
+    model_timestep_s: float | None = None
 
     def summary(self) -> str:
         status = "PASS" if self.success else f"FAIL in {self.failed_phase}"

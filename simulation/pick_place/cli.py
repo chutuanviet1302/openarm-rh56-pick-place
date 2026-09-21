@@ -20,12 +20,14 @@ import numpy as np
 from simulation.five_finger_model import BASKET_POSITION_B, PICK_POSITION_A
 from simulation.pick_place.demo import PHASES, Demo, run_trial, sample_layout
 from simulation.pick_place.episode import write_report
+from simulation.pick_place.routing import Route, TaskRouter
+from simulation.pick_place.scene import Scene
 
 CAMERAS = ("isometric", "overhead", "d435_head", "right_wrist_camera", "front_view", "side_view", "close_grasp", "free")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Scripted OpenArm right-hand five-finger pick-and-place demo")
+    parser = argparse.ArgumentParser(description="Scripted OpenArm bimanual five-finger pick-and-place demo")
     mode = parser.add_argument_group("mode")
     mode.add_argument("--headless", action="store_true", help="no window; run --trials episodes and write --report")
     mode.add_argument("--plan-only", action="store_true", help="derive targets and solve IK, print the table, run no physics")
@@ -40,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
     layout.add_argument("--randomize", action="store_true", help="sample a new IK-checked layout per trial (headless)")
     layout.add_argument("--seed", type=int, default=0)
     layout.add_argument("--perception", action="store_true", help="object position from the head camera (RGB-D), not sim state")
+    layout.add_argument("--arm", choices=("auto", "right", "left"), default="auto",
+                        help="arm selection; auto runs IK/collision preflight (default)")
 
     debug = parser.add_argument_group("debugging")
     debug.add_argument("--camera", choices=CAMERAS, default="isometric")
@@ -59,10 +63,10 @@ def install_trace(demo: Demo, period: float) -> None:
             return
         last[0] = t
         scene = executor.scene
-        forces = scene.finger_contact_forces("right")
+        forces = scene.finger_contact_forces(demo.side)
         print(
             f"[trace t={t:6.2f}s] object={np.round(scene.object_position(), 3).tolist()} "
-            f"wrist={np.round(scene.wrist_position('right'), 3).tolist()} "
+            f"wrist={np.round(scene.wrist_position(demo.side), 3).tolist()} "
             f"forces={{{', '.join(f'{k}:{v:.1f}' for k, v in forces.items())}}}"
         )
 
@@ -77,8 +81,17 @@ def main(argv: list[str] | None = None) -> None:
     layout = dict(pick_position=tuple(args.object), basket_position=tuple(args.basket),
                   perception=args.perception, verbose=args.verbose)
 
+    def select_side(trial_layout: dict) -> str:
+        if args.arm != "auto":
+            return args.arm
+        decision = TaskRouter(Scene(trial_layout["pick_position"], trial_layout["basket_position"])).select()
+        if decision.route not in (Route.DIRECT_RIGHT, Route.DIRECT_LEFT):
+            raise RuntimeError(f"{decision.route.value}: {decision.reason}")
+        print(f"route: {decision.route.value} — {decision.reason}")
+        return decision.source_arm
+
     if args.plan_only:
-        demo = Demo(**layout)
+        demo = Demo(**layout, side=select_side(layout))
         demo.phase_perceive()
         plan = demo.planner.plan(demo.object_position())
         print(demo.planner.describe(plan))
@@ -90,8 +103,9 @@ def main(argv: list[str] | None = None) -> None:
         for index in range(1, args.trials + 1):
             trial_layout = dict(layout)
             if args.randomize:
-                trial_layout.update(sample_layout(rng, perception=args.perception))
-            demo = Demo(**trial_layout)
+                sample_side = args.arm if args.arm != "auto" else ("right" if index % 2 else "left")
+                trial_layout.update(sample_layout(rng, side=sample_side, perception=args.perception))
+            demo = Demo(**trial_layout, side=select_side(trial_layout))
             if args.trace:
                 install_trace(demo, args.trace)
             result = run_trial(demo, stop_after=args.stop_after)
@@ -104,7 +118,7 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         return
 
-    demo = Demo(**layout)
+    demo = Demo(**layout, side=select_side(layout))
     if args.trace:
         install_trace(demo, args.trace)
     # Pressing R in the window restarts the episode: the scene is reset to its start

@@ -25,6 +25,11 @@ class AcceptanceTests(unittest.TestCase):
         # Final tilt must be upright < 15 degrees
         self.assertLessEqual(tilt, 15.0, f"Final tilt {tilt:.1f} deg exceeds 15 deg")
 
+    def test_left_arm_mirrored_trial_metrics(self):
+        result = run_trial(Demo((0.08, 0.38), (0.25, 0.25), side="left"))
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertEqual(result.route, "DIRECT_LEFT")
+
     def test_twenty_trials_acceptance(self):
         """At least 19/20 randomized RGB-D trials meet the physical metrics."""
         passed = 0

@@ -30,6 +30,8 @@ import numpy as np
 from simulation.five_finger_model import BASKET_POSITION_B, PICK_POSITION_A
 from simulation.pick_place.demo import Demo, run_trial
 from simulation.pick_place.kinematics import upright_tilt_degrees
+from simulation.pick_place.routing import Route, TaskRouter
+from simulation.pick_place.scene import Scene
 from simulation.vision_detector import VisionDetector
 
 EPISODES_ROOT = Path("artifacts") / "episodes"
@@ -80,12 +82,12 @@ class Recorder:
             self.renderer.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0  # update_scene resets the flags
             self.renderer.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
             self.writers[camera].append_data(self.renderer.render())
-        forces = scene.finger_contact_forces("right")
+        forces = scene.finger_contact_forces(self.demo.side)
         self.telemetry["t"].append(round(now, 3))
         self.telemetry["phase"].append(self.demo.log.current_phase)
         self.telemetry["object"].append(np.round(scene.object_position(), 4).tolist())
         self.telemetry["object_tilt_deg"].append(round(upright_tilt_degrees(scene.object_quaternion()), 1))
-        self.telemetry["wrist"].append(np.round(scene.wrist_position("right"), 4).tolist())
+        self.telemetry["wrist"].append(np.round(scene.wrist_position(self.demo.side), 4).tolist())
         self.telemetry["forces"].append([round(float(forces[name]), 2) for name in ("thumb", "index", "middle", "ring", "pinky")])
         self.frames += 1
 
@@ -111,7 +113,14 @@ def record(args: argparse.Namespace) -> Path:
     name = args.name or datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = EPISODES_ROOT / name
     out_dir.mkdir(parents=True, exist_ok=True)
-    demo = Demo(pick_position=tuple(args.object), basket_position=tuple(args.basket), perception=args.perception)
+    if args.arm == "auto":
+        decision = TaskRouter(Scene(tuple(args.object), tuple(args.basket))).select()
+        if decision.route not in (Route.DIRECT_RIGHT, Route.DIRECT_LEFT):
+            raise RuntimeError(f"{decision.route.value}: {decision.reason}")
+        side = decision.source_arm
+    else:
+        side = args.arm
+    demo = Demo(pick_position=tuple(args.object), basket_position=tuple(args.basket), perception=args.perception, side=side)
     demo.scene.reset()
     perception_image = save_perception_image(demo, out_dir / "perception.png")
 
@@ -128,7 +137,7 @@ def record(args: argparse.Namespace) -> Path:
     episode = {
         "name": name,
         "recorded_at": datetime.now().isoformat(timespec="seconds"),
-        "layout": {"object": list(args.object), "basket": list(args.basket), "perception": args.perception},
+        "layout": {"object": list(args.object), "basket": list(args.basket), "perception": args.perception, "arm": side},
         "fps": args.fps,
         "frames": recorder.frames,
         "duration_s": round(float(demo.data.time), 3),
@@ -146,6 +155,9 @@ def record(args: argparse.Namespace) -> Path:
             "place_yaw_deg": values.get("place_yaw_deg"),
             "grasp_forces_N": values.get("grasp_forces"),
             "proof_lift_tilt_deg": values.get("proof_lift_tilt_deg"),
+            "route": result.route,
+            "min_joint_margin_deg": result.min_joint_margin_deg,
+            "max_penetration_mm": round(result.max_penetration_m * 1000, 2),
         },
         "events": demo.log.events,
         "telemetry": recorder.telemetry,
@@ -180,6 +192,7 @@ def main() -> None:
     parser.add_argument("--object", type=float, nargs=2, metavar=("X", "Y"), default=list(PICK_POSITION_A))
     parser.add_argument("--basket", type=float, nargs=2, metavar=("X", "Y"), default=list(BASKET_POSITION_B))
     parser.add_argument("--perception", action="store_true", help="object position from the head camera (RGB-D)")
+    parser.add_argument("--arm", choices=("auto", "right", "left"), default="auto")
     parser.add_argument("--name", help="episode folder name (default: timestamp)")
     parser.add_argument("--fps", type=float, default=10.0, help="video frames per second of sim time (default 10)")
     parser.add_argument("--cameras", nargs="+", default=list(DEFAULT_CAMERAS),

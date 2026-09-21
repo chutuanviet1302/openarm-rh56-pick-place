@@ -21,6 +21,7 @@ from simulation.pick_place.config import (
     IK_POSITION_TOLERANCE,
     IK_ROTATION_TOLERANCE,
     IK_ROTATION_WEIGHT,
+    MIRROR_JOINT_SIGNS,
     NATURAL_GRASP_JOINTS,
     WRIST_BEND_INDICES,
     WRIST_STRAIGHT_GAIN,
@@ -86,9 +87,12 @@ def wrist_frame(model: mujoco.MjModel, side: str, joints: np.ndarray) -> tuple[n
     return data.site_xpos[site_id].copy(), data.site_xmat[site_id].reshape(3, 3).copy()
 
 
-def natural_grasp_frame(model: mujoco.MjModel) -> tuple[np.ndarray, np.ndarray]:
-    """Wrist frame of the right hand at NATURAL_GRASP_JOINTS (the straight-wrist posture)."""
-    return wrist_frame(model, "right", NATURAL_GRASP_JOINTS)
+def natural_grasp_frame(model: mujoco.MjModel, side: str = "right") -> tuple[np.ndarray, np.ndarray]:
+    """Wrist frame of either hand at the mirrored straight-wrist posture."""
+    if side not in ("left", "right"):
+        raise ValueError("side must be 'left' or 'right'")
+    joints = NATURAL_GRASP_JOINTS if side == "right" else NATURAL_GRASP_JOINTS * MIRROR_JOINT_SIGNS
+    return wrist_frame(model, side, joints)
 
 
 def solve_pose_ik(

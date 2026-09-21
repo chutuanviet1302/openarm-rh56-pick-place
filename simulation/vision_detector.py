@@ -137,7 +137,10 @@ class VisionDetector:
         # to the coloured ones. A radius around the colour guess does not do -- the
         # guess sits up to 3cm off the axis, and the basket wall or a hanging fist a
         # few cm away would be swept in and skew the extents by 1-2cm.
-        above_table = points[:, 2] > TABLE_TOP_Z + 0.04
+        # The basket rim is 5 cm above the table and can be only a few centimetres
+        # from the can. Keep the upper can surface, not every generic above-table
+        # point, otherwise grid connectivity merges the basket into the footprint.
+        above_table = points[:, 2] > TABLE_TOP_Z + 0.065
         window = valid.copy()
         window[valid] = above_table
         xy = points[above_table, :2]

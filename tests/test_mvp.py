@@ -12,10 +12,23 @@ from openarm_pick_place.models import CameraIntrinsics, GraspConfig, ObjectPose,
 from openarm_pick_place.motion import joint_trajectory, pick_place_waypoints
 from openarm_pick_place.perception import estimate_object_pose
 from openarm_pick_place.pipeline import PickPlaceController, append_trial
-from openarm_pick_place.ros2_nodes import inspire_command_positions
+from openarm_pick_place.ros2_nodes import inspire_command_positions, motion_arm_config
 
 
 class MvpTests(unittest.TestCase):
+    def test_bimanual_motion_config_and_legacy_right_config(self):
+        config = {
+            "ros": {"arm_actions": {"right": "/right", "left": "/left"}},
+            "motion": {"arms": {
+                "right": {"move_group": "right_arm", "joint_names": [f"r{i}" for i in range(7)]},
+                "left": {"move_group": "left_arm", "joint_names": [f"l{i}" for i in range(7)]},
+            }},
+        }
+        self.assertEqual(motion_arm_config(config, "left")["action"], "/left")
+        legacy = {"ros": {"arm_action": "/right"}, "motion": {"move_group": "right_arm", "joint_names": list(range(7))}}
+        self.assertEqual(motion_arm_config(legacy, "right")["action"], "/right")
+        with self.assertRaisesRegex(ValueError, "legacy"):
+            motion_arm_config(legacy, "left")
     def test_transform_round_trip(self):
         transform = make_transform(np.eye(3), np.array([0.1, -0.2, 0.3]))
         pose = Pose(np.array([0.4, 0.5, 0.6]))

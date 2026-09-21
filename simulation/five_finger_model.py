@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import mujoco
@@ -7,12 +8,15 @@ import numpy as np
 
 from simulation.openarm_mujoco import FLANGE_Z, configure_arm_servos, load_openarm_spec
 
-INSPIRE_ROOT = Path(__file__).parents[1] / "assets/rh56_controller/h1_mujoco/archive/inspire"
+_PROJECT_ROOT = Path(os.environ.get("OPENARM_PROJECT_ROOT", Path(__file__).parents[1]))
+if not (_PROJECT_ROOT / "assets/ycb/ycb_tomato_soup_can/meshes/tomato_soup_can.obj").is_file():
+    _PROJECT_ROOT = Path.cwd()
+INSPIRE_ROOT = _PROJECT_ROOT / "assets/rh56_controller/h1_mujoco/archive/inspire"
 # High-quality YCB object assets from P-161 project (mesh + texture).
 # Each sub-folder has  meshes/<name>.obj  and  textures/<name>.png.
 # Available objects: ycb_tomato_soup_can, ycb_apple, ycb_orange, ycb_peach,
 #                    ycb_pear, ycb_plum, ycb_lemon, ycb_strawberry
-YCB_ASSET_ROOT = Path(__file__).parents[1] / "assets" / "ycb"
+YCB_ASSET_ROOT = _PROJECT_ROOT / "assets" / "ycb"
 YCB_PICK_OBJECT_NAME = "ycb_tomato_soup_can"
 # Measured AABB of tomato_soup_can.obj: 6.79cm x 6.77cm x 10.19cm, centred at origin.
 # The collision cylinder is kept at the original tuned dimensions (slightly wider
@@ -44,13 +48,12 @@ HEAD_FRONT_X = 0.066                # vendor torso housing front face (pedestal 
 CAMERA_Z = SHOULDER_AXIS_Z + max(CAMERA_ABOVE_SHOULDER_AXIS, HEAD_TOP_ABOVE_SHOULDER_AXIS + CAMERA_BODY_HALF_HEIGHT)
 HAND_PREFIX = "inspire_"
 # Default pick point A and basket point B (table-plane x, y). A is out on the robot's
-# right, B is at the table's centre line to A's left, 33cm away -- the far side of the
-# right arm's reach (it cannot place past y ~ -0.04; the robot's left half of the table
-# belongs to the left arm). The top grasp comes in at whatever heading the planner's
+# right, B is forward of the pedestal with a physical gap from its base plate. The
+# top grasp comes in at whatever heading the planner's
 # grasp-yaw candidates reach. Both can be overridden per run
 # (`pick_place_demo --object X Y --basket X Y`).
-PICK_POSITION_A = (0.14, -0.36)
-BASKET_POSITION_B = (0.24, -0.04)
+PICK_POSITION_A = (0.08, -0.38)
+BASKET_POSITION_B = (0.25, -0.25)
 BASKET_FLOOR_Z = TABLE_TOP_Z + 0.005
 # Basket inner half-width and wall height. With the top grasp the hand comes down
 # onto the can from above, so the basket only has to clear the can plus the fingers
@@ -277,6 +280,12 @@ def build_five_finger_spec(
     )
 
     if pick_bottle:
+        riser_xy = np.array([-0.03, 0.0])
+        riser_half = np.array([0.13, 0.10])
+        pick_xy = np.asarray(pick_position, dtype=float)
+        if np.all(np.abs(pick_xy - riser_xy) < riser_half + OBJECT_RADIUS):
+            raise ValueError("pick object overlaps the robot base")
+
         # ── Resolve YCB mesh and texture from local assets/ycb/ ──────────
         obj_dir = YCB_ASSET_ROOT / YCB_PICK_OBJECT_NAME
         # Strip the "ycb_" prefix to get the bare asset name.
@@ -325,7 +334,7 @@ def build_five_finger_spec(
             type=mujoco.mjtGeom.mjGEOM_CYLINDER,
             # Collision cylinder matched to the real mesh AABB:
             # radius 3.40 cm, half-height 5.09 cm.
-            size=[OBJECT_RADIUS, OBJECT_HALF_HEIGHT],
+            size=[OBJECT_RADIUS, OBJECT_HALF_HEIGHT, 0.0],
             mass=0.2,
             friction=[1.2, 0.02, 0.002],
             rgba=[0.0, 0.0, 0.0, 0.0],
@@ -359,6 +368,10 @@ def build_five_finger_spec(
         distance = float(np.hypot(basket_position[0] - pick_position[0], basket_position[1] - pick_position[1]))
         if distance < 0.15:
             raise ValueError(f"basket must be at least 15cm from the pick point, got {distance*100:.1f}cm")
+        basket_xy = np.asarray(basket_position, dtype=float)
+        basket_outer_half = BASKET_HALF_WIDTH + BASKET_WALL_THICKNESS
+        if np.all(np.abs(basket_xy - riser_xy) < riser_half + basket_outer_half):
+            raise ValueError("basket overlaps the robot base")
         basket = arm.worldbody.add_body(
             name="place_basket", pos=[float(basket_position[0]), float(basket_position[1]), BASKET_FLOOR_Z]
         )
@@ -415,6 +428,10 @@ def _soften_finger_contacts(model: mujoco.MjModel) -> None:
         if model.geom_contype[geom] == 0 and model.geom_conaffinity[geom] == 0:
             continue
         model.geom_solref[geom, 0] = max(float(model.geom_solref[geom, 0]), 0.02)
+        # The vendor left-hand collision meshes need the rubber-pad coefficient to
+        # match the measured right-hand hold. Calibrate this again with RH56F1 data.
+        if body.startswith(f"{HAND_PREFIX}left_"):
+            model.geom_friction[geom, 0] = 2.0
 
 
 def _soften_hand_actuators(model: mujoco.MjModel) -> None:

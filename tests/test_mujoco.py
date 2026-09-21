@@ -11,6 +11,7 @@ from simulation.five_finger_model import (
     build_five_finger_model,
 )
 from simulation.pick_place_demo import Demo
+from simulation.pick_place.planner import GraspPlanner
 
 
 class MujocoSmokeTests(unittest.TestCase):
@@ -73,6 +74,15 @@ class MujocoSmokeTests(unittest.TestCase):
         # right hand models rest at different finger curls.
         mirrored = offsets["right"][:2] * np.array([1.0, -1.0])
         np.testing.assert_allclose(offsets["left"][:2], mirrored, atol=0.02)
+
+    def test_left_tip_sites_are_true_mirrors_not_folded_into_the_palm(self):
+        demo = Demo()
+        lengths = {}
+        for side in ("left", "right"):
+            planner = GraspPlanner(demo.scene, side)
+            fingers, thumb = planner.local_jaw_offsets()
+            lengths[side] = np.array([np.linalg.norm(fingers), np.linalg.norm(thumb)])
+        np.testing.assert_allclose(lengths["left"], lengths["right"], atol=0.003)
 
     def test_palm_collides_and_does_not_touch_the_arm(self):
         """Every hand geom takes part in collision (the hand must not be able to pass
@@ -193,8 +203,17 @@ class MujocoSmokeTests(unittest.TestCase):
         self.assertAlmostEqual(float(data.xpos[model.body("pick_bottle").id][2]), TABLE_TOP_Z + 0.05, places=3)
         basket = model.geom("place_basket_bottom")
         self.assertAlmostEqual(float(data.geom_xpos[basket.id][2] - basket.size[2]), TABLE_TOP_Z, places=3)
+        basket_xy = data.geom_xpos[basket.id][:2]
+        riser_xy = data.geom_xpos[riser.id][:2]
+        self.assertTrue(np.any(np.abs(basket_xy - riser_xy) >= basket.size[:2] + riser.size[:2]))
         self.assertEqual(model.joint("pick_bottle_joint").type[0], mujoco.mjtJoint.mjJNT_FREE)
         self.assertEqual(model.geom("ycb_mustard_bottle_visual").type[0], mujoco.mjtGeom.mjGEOM_MESH)
+
+    def test_rejects_props_overlapping_robot_base(self):
+        with self.assertRaisesRegex(ValueError, "pick object overlaps"):
+            build_five_finger_model(pick_bottle=True, pick_position=(0.0, 0.0), basket_position=(0.30, -0.20))
+        with self.assertRaisesRegex(ValueError, "basket overlaps"):
+            build_five_finger_model(pick_bottle=True, pick_position=(0.08, -0.38), basket_position=(0.16, -0.10))
 
     def test_pick_scene_has_colored_mustard_bottle_and_basket(self):
         model = build_five_finger_model(pick_bottle=True)

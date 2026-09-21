@@ -31,7 +31,12 @@ WRIST_BEND_INDICES = (5, 6)
 # Reference posture is selected by scripts/sweep_postures.py from collision-free
 # top-grasps 20/25/30 degrees off vertical. The exact value is updated from that sweep.
 NATURAL_GRASP_JOINTS = np.array([0.065, 0.283, -1.042, 0.709, -0.395, -0.219, -0.658])
-RIGHT_SEED = NATURAL_GRASP_JOINTS
+# Same tool pose has multiple 7-DOF IK branches. This seed keeps the elbow near the
+# torso and lets the forearm reach outward, instead of lifting the elbow beside the
+# wrist. The wrist orientation still comes from NATURAL_GRASP_JOINTS above.
+RIGHT_SEED = np.array([-0.360, 0.286, 0.353, 0.729, -1.375, -0.067, 0.115])
+MIRROR_JOINT_SIGNS = np.array([-1.0, -1.0, -1.0, 1.0, -1.0, -1.0, -1.0])
+ARM_SEED = {"right": RIGHT_SEED, "left": RIGHT_SEED * MIRROR_JOINT_SIGNS}
 TOP_GRASP_TILT_CANDIDATES_DEG = (20.0, 25.0, 30.0)
 MIN_JOINT_MARGIN_DEG = 3.0
 MIN_FLOOR_CLEARANCE = 0.005
@@ -46,7 +51,7 @@ IK_MAX_ITERATIONS = 6000
 # iterations (an unreachable target otherwise burns the whole budget: ~2.6s each).
 IK_STALL_ITERATIONS = 40
 IK_STALL_TOLERANCE = 1e-5
-IK_POSITION_TOLERANCE = 0.006
+IK_POSITION_TOLERANCE = 0.004
 IK_ROTATION_TOLERANCE = 0.05
 IK_ROTATION_WEIGHT = 0.4
 IK_DAMPING = 0.004
@@ -65,7 +70,7 @@ GRASP_HEIGHT_BIAS = 0.04
 # Bias along the thumb-to-fingers line to centre the can in the aperture.
 JAW_AXIS_BIAS = -0.011
 # 0 sits the wrist at the jaw midpoint, 0.5 puts the fingers themselves on the object.
-JAW_BIAS_TOWARD_FINGERS = 0.0
+JAW_BIAS_TOWARD_FINGERS = {"right": 0.0, "left": 0.30}
 GRASP_POSITION_CORRECTION = np.array([0.0, 0.0, 0.0])
 # Standoff opposite the fingers' full 3-D pointing direction.
 APPROACH_STANDOFF = 0.08
@@ -92,7 +97,17 @@ CARRY_CLEARANCE_MARGIN = 0.01
 # actually touches the floor (SET_DOWN_*), and only then opens: releasing a can that is
 # still in the air let the opening thumb lever it 5cm up and it landed 3cm off.
 PLACE_DROP_HEIGHT = 0.02
-PLACE_POSITION_CORRECTION = np.array([0.018, 0.007, 0.0])
+# No standing XY bias: the object is centred over the basket from its own measured
+# position just before the set-down (Demo._centre_over_basket). The hand-tuned offsets
+# that used to live here were calibrated against one carry timing -- at 19.3mm long they
+# spent the whole 20mm placement budget before the trial even started.
+PLACE_POSITION_CORRECTION = {
+    "right": np.zeros(3),
+    "left": np.zeros(3),
+}
+# Below this the object is already centred well enough to set down as planned.
+SET_DOWN_CENTRING_TOLERANCE = 0.002
+SET_DOWN_CENTRING_SECONDS = 0.5
 SET_DOWN_STEP = 0.004
 SET_DOWN_MAX_DEPTH = 0.04
 # The set-down keeps descending until the object's centre is within this of its
@@ -113,6 +128,8 @@ PLACE_YAW_CANDIDATES_DEG = (0.0, -30.0, 30.0, -60.0, 60.0, -90.0, 90.0, -120.0, 
 # interpolation between only the endpoints let the hand pitch on the way and the can
 # rolled 30 degrees in the grip.
 CARRY_PATH_STEPS = 8
+TRANSFER_BASE_CLEARANCE = 0.22
+TRANSFER_LONG_PATH_M = 0.45
 
 # --------------------------------------------------------------------------- proof lift
 PROOF_LIFT_HEIGHT = 0.05
@@ -162,8 +179,8 @@ MOVE_TO_PREGRASP = 1.2
 PREGRASP_SETTLE = 0.2
 MOVE_TO_GRASP = 1.0
 PROOF_LIFT_SECONDS = 0.8
-MOVE_TO_LIFT = 1.2
-TRANSFER_SECONDS = 2.0
+MOVE_TO_LIFT = 1.8
+TRANSFER_SECONDS = 3.0
 LOWER_SECONDS = 1.2
 ALL_FINGERS = ("index", "middle", "ring", "pinky", "thumb")
 RELAX_GRIP_SECONDS = 0.6  # grip force -> light contact before the fingers open
@@ -173,4 +190,12 @@ RETURN_SECONDS = 1.2
 FINAL_SETTLE = 3.0
 
 # --------------------------------------------------------------------------- viewer
-VIEWER_FRAME_SECONDS = 1.0 / 60.0
+VIEWER_FRAME_SECONDS = 1.0 / 30.0
+
+# --------------------------------------------------------------------------- evaluation
+BENCHMARK_TRIALS = 50
+BENCHMARK_REQUIRED_PASSES = 48  # 47/50 is only 94%; >=95% therefore means 48.
+PLACEMENT_ERROR_LIMIT_M = 0.02
+PERCEPTION_MAX_ERROR_M = 0.01
+PERCEPTION_P95_ERROR_M = 0.005
+FINAL_STABILITY_SECONDS = 0.5

@@ -37,9 +37,13 @@ class Demo:
         perception: bool = False,
         perception_camera: str = "d435_head",
         verbose: bool = False,
+        side: str = "right",
     ) -> None:
+        if side not in ("left", "right"):
+            raise ValueError("side must be 'left' or 'right'")
+        self.side = side
         self.scene = Scene(pick_position, basket_position)
-        self.planner = GraspPlanner(self.scene)
+        self.planner = GraspPlanner(self.scene, side)
         self.executor = Executor(self.scene)
         self.log = EpisodeLog(lambda: self.scene.data.time, verbose=verbose)
         # With perception on, the object's position comes from the camera (RGB-D ->
@@ -106,7 +110,7 @@ class Demo:
 
     # ------------------------------------------------------------------ grasp checks
     def fingers_not_pressing(self) -> list[str]:
-        forces = self.scene.finger_contact_forces("right")
+        forces = self.scene.finger_contact_forces(self.side)
         missing = []
         # The thumb alone opposes the four fingers, so it carries the load: a thumb that
         # never built up real pressure (3.7N seen at a heading that then dropped the
@@ -143,59 +147,66 @@ class Demo:
         self.plan = self.planner.plan(self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws))
         self.log.record("grasp_yaw_deg", float(self.plan.grasp_yaw_deg))
         self.log.record("place_yaw_deg", float(self.plan.place_yaw_deg))
+        self.log.record("route_strategy", self.plan.route_strategy)
+        self.log.record(
+            "min_joint_margin_deg",
+            min(self.planner.joint_margin_degrees(joints) for joints in self.plan.joints.values()),
+        )
         self.log.record("phase_wrist_positions", {k: v.tolist() for k, v in self.plan.centers.items()})
         self.log.record("phase_joint_targets", {k: v.tolist() for k, v in self.plan.joints.items()})
-        self.log.note(f"waypoints solved, set-down hand yaw {self.plan.place_yaw_deg:+.0f} degrees")
+        self.log.note(f"waypoints solved via {self.plan.route_strategy}, set-down hand yaw {self.plan.place_yaw_deg:+.0f} degrees")
         if self.log.verbose:
             print(self.planner.describe(self.plan))
 
     def phase_ready(self) -> None:
         ex, plan = self.executor, self.plan
         ex.hold(C.SETTLE_AT_START)
-        ex.move_to({"right_arm": plan["raise"]}, C.MOVE_TO_RAISE)
-        ex.move_to({"right_arm": plan["hover"]}, C.MOVE_TO_HOVER)
-        ex.move_to({"right_arm": plan["ready"]}, C.MOVE_TO_READY)
+        arm = f"{self.side}_arm"
+        ex.move_to({arm: plan["raise"]}, C.MOVE_TO_RAISE)
+        ex.move_to({arm: plan["hover"]}, C.MOVE_TO_HOVER)
+        ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
 
     def phase_reach(self) -> None:
         ex, plan, scene = self.executor, self.plan, self.scene
         # Open wide *before* travelling, slide in horizontally so the object enters
         # between the jaws, close only once the arm has arrived.
-        ex.preshape_hand("right")
+        side, arm = self.side, f"{self.side}_arm"
+        ex.preshape_hand(side)
         ex.hold(C.PRESHAPE_SETTLE)
-        ex.move_to({"right_arm": plan["pregrasp"]}, C.MOVE_TO_PREGRASP)
+        ex.move_to({arm: plan["pregrasp"]}, C.MOVE_TO_PREGRASP)
         ex.hold(C.PREGRASP_SETTLE)
-        touching = {n: f for n, f in scene.finger_contact_forces("right").items() if f > 0.05}
+        touching = {n: f for n, f in scene.finger_contact_forces(side).items() if f > 0.05}
         if touching:
             raise RuntimeError(
                 f"standoff pose is already touching the object ({touching}); "
                 f"increase APPROACH_STANDOFF (currently {C.APPROACH_STANDOFF:.2f}m)"
             )
-        ex.move_to({"right_arm": plan["grasp"]}, C.MOVE_TO_GRASP)
-        bend = [float(np.degrees(self.data.qpos[scene.arm_qpos["right"][i]])) for i in C.WRIST_BEND_INDICES]
+        ex.move_to({arm: plan["grasp"]}, C.MOVE_TO_GRASP)
+        bend = [float(np.degrees(self.data.qpos[scene.arm_qpos[side][i]])) for i in C.WRIST_BEND_INDICES]
         self.log.record("wrist_pitch_at_grasp_deg", float(np.hypot(*bend)))
         self.log.note(f"wrist bend at grasp: joint6 {bend[0]:+.1f}, joint7 {bend[1]:+.1f} degrees (0 = hand in line with forearm)")
 
     def phase_grasp(self) -> None:
-        ex, scene = self.executor, self.scene
+        ex, scene, side = self.executor, self.scene, self.side
         fingers = ("index", "middle", "ring", "pinky")
-        ex.close_until_contact("right", fingers, force_target=1.0)
-        ex.close_until_contact("right", ("thumb",), force_target=1.0)
+        ex.close_until_contact(side, fingers, force_target=1.0)
+        ex.close_until_contact(side, ("thumb",), force_target=1.0)
         # Remember the light-contact hand pose: the release returns to it first.
-        self.light_grip_ctrl = scene.data.ctrl[scene.hand_actuators["right"]].copy()
-        forces = ex.close_until_contact("right", (*fingers, "thumb"))
+        self.light_grip_ctrl = scene.data.ctrl[scene.hand_actuators[side]].copy()
+        forces = ex.close_until_contact(side, (*fingers, "thumb"))
         self.log.note("contact force per finger (N): " + ", ".join(f"{k}={v:.2f}" for k, v in forces.items()))
         # Every finger must be on the object before the hand moves at all; a finger that
         # stopped short is closed further on its own.
         missing = self.fingers_not_pressing()
         if missing:
-            forces = ex.close_until_contact("right", tuple(missing))
+            forces = ex.close_until_contact(side, tuple(missing))
             missing = self.fingers_not_pressing()
         if missing:
             raise RuntimeError(f"not all fingers touch the object before lift; missing {missing}: {forces}")
-        self.log.record("grasp_forces", scene.finger_contact_forces("right"))
+        self.log.record("grasp_forces", scene.finger_contact_forces(side))
         self.log.note("thumb opposed by at least two fingers -> proof lift")
 
-        rise, tilt, hand_rise = ex.proof_lift(self.planner.orientation)
+        rise, tilt, hand_rise = ex.proof_lift(side, self.planner.orientation)
         slip = hand_rise - rise
         self.log.record("proof_lift_rise_m", rise)
         self.log.record("proof_lift_hand_rise_m", hand_rise)
@@ -219,29 +230,36 @@ class Demo:
         return clearance
 
     def phase_carry(self) -> None:
-        ex, plan, scene = self.executor, self.plan, self.scene
-        ex.move_to({"right_arm": plan["lift"]}, C.MOVE_TO_LIFT)
+        ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
+        arm = f"{side}_arm"
+        ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
         clearance = self._check_carry_clearance("lift")
         # Re-plan the set-down from where the object actually sits in the hand: the
         # fingers never close exactly on the nominal jaw centre, and that few-mm offset
         # otherwise turns into a placement error (2.5cm measured with the nominal jaw).
-        held = scene.object_position() - scene.wrist_position("right")
-        held_at_grasp_orientation = self.planner.orientation @ scene.wrist_rotation("right").T @ held
-        self.planner.plan_place(plan, self.object_position(), held_offset=held_at_grasp_orientation)
+        held = scene.object_position() - scene.wrist_position(side)
+        held_at_grasp_orientation = self.planner.orientation @ scene.wrist_rotation(side).T @ held
+        try:
+            self.planner.plan_place(plan, self.object_position(), held_offset=held_at_grasp_orientation)
+            self.log.note(f"object held {np.round(held_at_grasp_orientation, 3).tolist()} from the wrist; set-down re-planned")
+        except RuntimeError as error:
+            # The nominal collision-checked set-down is still valid. A measured grip
+            # offset can make the compensated pose unreachable near a workspace edge.
+            self.log.note(f"held-offset compensation unavailable; using nominal set-down ({str(error).splitlines()[0]})")
         self.log.record("held_offset_m", held_at_grasp_orientation)
-        self.log.note(f"object held {np.round(held_at_grasp_orientation, 3).tolist()} from the wrist; set-down re-planned")
         self.log.record("carry_clearance_above_rim_m", clearance)
         self.log.note(f"object bottom is {clearance*100:+.1f}cm above the basket rim; transferring A -> B")
         path = plan.paths["transfer"]
-        ex.follow({"right_arm": path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
+        ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
         self._check_carry_clearance("transfer")
         self.log.note("lowering the object into the basket")
         path = plan.paths["lower"]
-        ex.follow({"right_arm": path}, [C.LOWER_SECONDS / len(path)] * len(path))
+        ex.follow({arm: path}, [C.LOWER_SECONDS / len(path)] * len(path))
         # Set the object down for real: keep descending until it rests on the floor.
         from simulation.pick_place.kinematics import rotation_z
 
         orientation = rotation_z(plan.place_yaw_deg) @ self.planner.orientation
+        self._centre_over_basket(orientation)
         # Stop only once the object stands flat: a can held slightly tilted touches the
         # floor on its rim first, and releasing it there lets it topple onto its base
         # and skid a centimetre or more. A few more millimetres of descent let the
@@ -252,15 +270,56 @@ class Demo:
         def seated() -> bool:
             return scene.object_touches("place_basket_bottom") and float(scene.object_position()[2]) <= resting_z + C.SET_DOWN_SEATED_TOLERANCE
 
-        went = ex.descend_until("right", orientation, seated)
+        went = ex.descend_until(side, orientation, seated)
         touching = scene.object_touches("place_basket_bottom")
         self.log.record("set_down_descent_m", went)
         self.log.note(f"descended {went*100:.1f}cm more; object {'rests on' if touching else 'is NOT on'} the basket floor")
         if not touching:
             raise RuntimeError(f"set-down failed: object still off the floor after {went*100:.1f}cm of descent")
 
+    def _centre_over_basket(self, orientation: np.ndarray) -> None:
+        """Slide the wrist so the object -- not the wrist -- hangs over the basket centre.
+
+        The set-down is planned from the grip offset measured back at the lift, but the
+        object creeps in the hand during the carry, so by the time it is over the basket
+        that offset no longer describes it: measured across 18 trials it came down a
+        systematic 13mm short in both axes of where the wrist had aimed it. Closing the
+        loop here, on the object's real position at the moment it matters, is the same
+        idea as the lift-time re-plan -- just applied late enough to still be true.
+        """
+        from simulation.pick_place.kinematics import solve_pose_ik
+
+        ex, scene, side = self.executor, self.scene, self.side
+        error = scene.object_position()[:2] - scene.basket_floor()[:2]
+        if float(np.linalg.norm(error)) <= C.SET_DOWN_CENTRING_TOLERANCE:
+            return
+        target = scene.wrist_position(side)
+        target[:2] -= error
+        try:
+            joints = solve_pose_ik(
+                self.model, side, target, orientation, self.data.ctrl[scene.arm_actuators[side]].copy()
+            )
+        except RuntimeError as failure:
+            self.log.note(f"centring over the basket unavailable ({failure}); setting down as planned")
+            return
+        # Near the floor the hand sits deep between the basket walls, where a sideways
+        # correction can put a knuckle through one. Skip the correction rather than
+        # abort the set-down over it.
+        hits = self.planner.hand_contacts(joints, scene.basket_geoms, closed=True)
+        if hits:
+            self.log.note(f"centring would put {', '.join(sorted(hits))} into the basket; setting down as planned")
+            return
+        ex.move_to({f"{side}_arm": joints}, C.SET_DOWN_CENTRING_SECONDS)
+        moved = scene.object_position()[:2] - scene.basket_floor()[:2]
+        self.log.record("set_down_centring_m", float(np.linalg.norm(error)))
+        self.log.note(
+            f"object was {np.linalg.norm(error)*1000:.1f}mm off the basket centre; "
+            f"centred to {np.linalg.norm(moved)*1000:.1f}mm before setting down"
+        )
+
     def phase_release(self) -> None:
-        ex, plan, scene = self.executor, self.plan, self.scene
+        ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
+        arm, hand = f"{side}_arm", f"{side}_hand"
         # The object already rests on the basket floor (phase_carry). Release in three
         # steps, measured across four cases (two layouts, with and without RGB-D;
         # placement 1-12mm, every other ordering tried was worse, up to toppling the
@@ -269,22 +328,28 @@ class Demo:
         # while the wrist retreats straight up, and only at carry height swing the
         # thumb out of opposition -- that yaw swing sweeps sideways through the can's
         # footprint and shoved it 25mm when done at set-down height.
-        ex.move_to({"right_hand": self.light_grip_ctrl}, C.RELAX_GRIP_SECONDS)
-        ex.move_to({"right_hand": scene.hand_ctrl("right", open_fingers=C.ALL_FINGERS), "right_arm": plan["transfer"]}, C.RETREAT_SECONDS)
-        ex.open_fingers("right", ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
+        ex.move_to({hand: self.light_grip_ctrl}, C.RELAX_GRIP_SECONDS)
+        if side == "left":
+            # The mirrored RH56 collision geometry releases cleanly by opening first;
+            # coupling opening to the retreat sweeps its index side through the can.
+            ex.open_fingers(side, C.ALL_FINGERS, C.RELEASE_SECONDS)
+            ex.move_to({arm: plan["transfer"]}, C.RETREAT_SECONDS)
+        else:
+            ex.move_to({hand: scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS), arm: plan["transfer"]}, C.RETREAT_SECONDS)
+        ex.open_fingers(side, ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
         # Continue home after clearing the basket.
-        ex.move_to({"right_arm": plan["hover"], "right_hand": scene.closed_hand["right"]}, C.RETURN_SECONDS)
+        ex.move_to({arm: plan["hover"], hand: scene.closed_hand[side]}, C.RETURN_SECONDS)
         # Back the way it came, via a raise point re-chosen now that the object stands
         # in the basket, so the hand never sweeps low over the basket or the object.
         raise_joints, _ = self.planner.find_raise(plan["hover"], plan.centers["hover"])
-        ex.move_to({"right_arm": raise_joints}, C.RETURN_SECONDS)
-        ex.move_to({"right_arm": scene.attention_pose["right"]}, C.RETURN_SECONDS)
+        ex.move_to({arm: raise_joints}, C.RETURN_SECONDS)
+        ex.move_to({arm: scene.attention_pose[side]}, C.RETURN_SECONDS)
         ex.hold(C.FINAL_SETTLE)  # settle to verify the object stands on its own
 
     PHASE_MESSAGES = {
         "perceive": "locating the object with the head camera",
         "plan": "deriving wrist targets from object, basket and hand geometry, solving IK chain",
-        "ready": "attention stance, then raising the right arm to hover",
+        "ready": "attention stance, then raising the selected arm to hover",
         "reach": "opening the hand, sliding in horizontally around the object",
         "grasp": "making light opposing contact, increasing grip force, proof lift",
         "carry": "lifting above the basket rim, moving A -> B, lowering",
@@ -314,7 +379,7 @@ class Demo:
                 self.recover_from_failed_grasp()
                 index = PHASES.index("perceive")
                 continue
-            self.log.observe(name, object=self.scene.object_position(), wrist=self.scene.wrist_position("right"))
+            self.log.observe(name, object=self.scene.object_position(), wrist=self.scene.wrist_position(self.side))
             if name == stop_after:
                 self.log.note(f"stopped after '{name}' as requested")
                 return
@@ -323,15 +388,16 @@ class Demo:
     def recover_from_failed_grasp(self) -> None:
         """Let go of the object where it is and return to attention, the same way the
         release does, so the episode can plan afresh from a clean stance."""
-        ex, plan, scene = self.executor, self.plan, self.scene
+        ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
+        arm, hand = f"{side}_arm", f"{side}_hand"
         if self.light_grip_ctrl is not None:
-            ex.move_to({"right_hand": self.light_grip_ctrl}, C.RELAX_GRIP_SECONDS)
-        ex.move_to({"right_hand": scene.hand_ctrl("right", open_fingers=C.ALL_FINGERS), "right_arm": plan["hover"]}, C.RETREAT_SECONDS)
-        ex.open_fingers("right", ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
-        ex.move_to({"right_hand": scene.closed_hand["right"]}, 0.5 * C.RELEASE_SECONDS)
+            ex.move_to({hand: self.light_grip_ctrl}, C.RELAX_GRIP_SECONDS)
+        ex.move_to({hand: scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS), arm: plan["hover"]}, C.RETREAT_SECONDS)
+        ex.open_fingers(side, ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
+        ex.move_to({hand: scene.closed_hand[side]}, 0.5 * C.RELEASE_SECONDS)
         raise_joints, _ = self.planner.find_raise(plan["hover"], plan.centers["hover"])
-        ex.move_to({"right_arm": raise_joints}, C.RETURN_SECONDS)
-        ex.move_to({"right_arm": scene.attention_pose["right"]}, C.RETURN_SECONDS)
+        ex.move_to({arm: raise_joints}, C.RETURN_SECONDS)
+        ex.move_to({arm: scene.attention_pose[side]}, C.RETURN_SECONDS)
         ex.hold(C.SETTLE_AT_START)
         self.perceived_position = None  # look again: the failed grasp may have moved it
 
@@ -360,7 +426,7 @@ class Demo:
 
     def _solve_poses(self) -> dict[str, dict[str, np.ndarray]]:
         self.plan = self.planner.plan(self.object_position())
-        return {"right": {**self.plan.joints, **{f"{k}_path": v for k, v in self.plan.paths.items()}}}
+        return {self.side: {**self.plan.joints, **{f"{k}_path": v for k, v in self.plan.paths.items()}}}
 
     def _phase_centers(self, place_yaw_deg: float = 0.0) -> dict[str, np.ndarray]:
         return self.planner.centers(self.object_position(), place_yaw_deg)
@@ -374,7 +440,9 @@ def object_to_basket_distance(pick, basket, half_width: float = BASKET_HALF_WIDT
     return float(np.hypot(dx, dy))
 
 
-def sample_layout(rng: np.random.Generator, *, perception: bool = False, attempts: int = 50) -> dict:
+def sample_layout(
+    rng: np.random.Generator, *, side: str = "right", perception: bool = False, attempts: int = 50
+) -> dict:
     """Draw an object/basket layout the planner can actually execute.
 
     Randomization must preserve the success condition: a sample is accepted only once
@@ -382,14 +450,17 @@ def sample_layout(rng: np.random.Generator, *, perception: bool = False, attempt
     few seconds of planning rather than a physics trial that says nothing about the grasp.
     """
     for _ in range(attempts):
-        pick = (float(rng.uniform(*C.RANDOM_PICK_BOX[0])), float(rng.uniform(*C.RANDOM_PICK_BOX[1])))
-        basket = (float(rng.uniform(*C.RANDOM_BASKET_BOX[0])), float(rng.uniform(*C.RANDOM_BASKET_BOX[1])))
+        if side not in ("left", "right"):
+            raise ValueError("side must be 'left' or 'right'")
+        mirror = 1.0 if side == "right" else -1.0
+        pick = (float(rng.uniform(*C.RANDOM_PICK_BOX[0])), mirror * float(rng.uniform(*C.RANDOM_PICK_BOX[1])))
+        basket = (float(rng.uniform(*C.RANDOM_BASKET_BOX[0])), mirror * float(rng.uniform(*C.RANDOM_BASKET_BOX[1])))
         if np.hypot(basket[0] - pick[0], basket[1] - pick[1]) < C.MIN_PICK_TO_BASKET_M:
             continue
         if object_to_basket_distance(pick, basket) < C.MIN_OBJECT_TO_BASKET_M:
             continue
         try:
-            Demo(pick, basket, perception=perception)._solve_poses()
+            Demo(pick, basket, perception=perception, side=side)._solve_poses()
         except (RuntimeError, ValueError):
             continue
         return dict(pick_position=pick, basket_position=basket)
@@ -420,7 +491,7 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
         float(scene.data.time),
         placement_error_m=placement_error,
         bottle_tilt_deg=tilt,
-        contact_forces=scene.finger_contact_forces("right"),
+        contact_forces=scene.finger_contact_forces(demo.side),
         pick_position=list(scene.pick_position),
         basket_position=list(scene.basket_position),
         perception_used=demo.perception,
@@ -436,4 +507,10 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
         phase_wrist_positions=values.get("phase_wrist_positions"),
         phase_joint_targets=values.get("phase_joint_targets"),
         phase_observations=demo.log.observations,
+        route=f"DIRECT_{demo.side.upper()}",
+        source_arm=demo.side,
+        target_arm=demo.side,
+        min_joint_margin_deg=values.get("min_joint_margin_deg"),
+        max_penetration_m=demo.executor.max_penetration_m,
+        model_timestep_s=float(scene.model.opt.timestep),
     )

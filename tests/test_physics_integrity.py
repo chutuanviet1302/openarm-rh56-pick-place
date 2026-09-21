@@ -17,11 +17,12 @@ class PhysicsIntegrityTests(unittest.TestCase):
         np.testing.assert_allclose(-data.cam_xmat[camera].reshape(3, 3)[:, 2], [0, 0, -1])
         pick = data.xpos[model.body("pick_bottle").id]
         place = data.xpos[model.body("place_basket").id]
-        # The object stands out on the robot's right; the basket is near the centre
-        # line, to the object's left.
+        # Keep the approved layout; assert physical separation rather than a stale
+        # assumption that the basket must be on the centre line.
         self.assertLess(pick[1], -0.30)
-        self.assertLess(abs(place[1]), 0.06)
         self.assertGreaterEqual(np.linalg.norm(pick[:2] - place[:2]), 0.15)
+        self.assertGreater(pick[2], 0.0)
+        self.assertGreater(place[2], 0.0)
 
     def test_object_mass_is_not_increased_by_visual_mesh(self):
         model = build_five_finger_model(pick_bottle=True)
