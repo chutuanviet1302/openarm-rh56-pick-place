@@ -156,12 +156,20 @@ def _camera_quat(eye: np.ndarray, target: np.ndarray, up: np.ndarray = np.array(
 
 
 def build_five_finger_spec(
-    *, pick_bottle: bool = False, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B
+    *, pick_bottle: bool = False, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B,
+    arm_half_separation: float | None = None,
 ) -> mujoco.MjSpec:
     if not INSPIRE_ROOT.is_dir():
         raise FileNotFoundError("Inspire RH56DFX assets missing; clone correlllab/rh56_controller with h1_mujoco")
 
     arm = load_openarm_spec()
+    if arm_half_separation is not None:
+        if arm_half_separation <= 0.0:
+            raise ValueError("arm_half_separation must be positive")
+        # Simulation fixture only: move the two arm roots on the common torso.  The
+        # default keeps OpenArm v1 geometry; handoff experiments opt in explicitly.
+        arm.body("openarm_left_link0").pos[1] = arm_half_separation
+        arm.body("openarm_right_link0").pos[1] = -arm_half_separation
     # The vendor scene's ground plane becomes the room floor; the table stands on it.
     arm.geom("floor").pos = [0.0, 0.0, ROOM_FLOOR_Z]
     table_x = 0.5 * (TABLE_X_RANGE[0] + TABLE_X_RANGE[1])
@@ -389,10 +397,12 @@ def build_five_finger_spec(
 
 
 def build_five_finger_model(
-    *, pick_bottle: bool = False, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B
+    *, pick_bottle: bool = False, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B,
+    arm_half_separation: float | None = None,
 ) -> mujoco.MjModel:
     model = build_five_finger_spec(
-        pick_bottle=pick_bottle, pick_position=pick_position, basket_position=basket_position
+        pick_bottle=pick_bottle, pick_position=pick_position, basket_position=basket_position,
+        arm_half_separation=arm_half_separation,
     ).compile()
     _stiffen_arm_actuators(model)
     _soften_hand_actuators(model)

@@ -35,11 +35,14 @@ from simulation.pick_place.kinematics import wrist_frame, hand_pose, natural_gra
 
 
 class Scene:
-    def __init__(self, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B) -> None:
+    def __init__(
+        self, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B, *, arm_half_separation: float | None = None
+    ) -> None:
         self.pick_position = tuple(float(v) for v in pick_position)
         self.basket_position = tuple(float(v) for v in basket_position)
         self.model = build_five_finger_model(
-            pick_bottle=True, pick_position=self.pick_position, basket_position=self.basket_position
+            pick_bottle=True, pick_position=self.pick_position, basket_position=self.basket_position,
+            arm_half_separation=arm_half_separation,
         )
         self.data = mujoco.MjData(self.model)
         # The grasp orientation is whatever the hand has when the wrist is straight in

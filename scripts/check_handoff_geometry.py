@@ -6,6 +6,8 @@ This is a static pose screen, not a proof of an executable handoff trajectory.
 
 from __future__ import annotations
 
+import argparse
+
 import mujoco
 import numpy as np
 
@@ -16,7 +18,13 @@ from simulation.pick_place.scene import Scene
 
 
 def main() -> None:
-    scene = Scene((0.08, -0.38), (0.25, 0.25))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--arm-half-separation", type=float,
+        help="simulation fixture: lateral distance from torso centre to each arm root (m)",
+    )
+    args = parser.parse_args()
+    scene = Scene((0.08, -0.38), (0.25, 0.25), arm_half_separation=args.arm_half_separation)
     model = scene.model
     planners = {side: GraspPlanner(scene, side) for side in ("right", "left")}
     # The two jaw centres must overlap the same 100 mm bottle.  A pose with
@@ -64,6 +72,8 @@ def main() -> None:
                     candidate = (max(overlaps, default=0.0), len(overlaps), (x, z, right_yaw, right_dz, left_yaw, left_dz))
                     if best is None or candidate[:2] < best[:2]:
                         best = candidate
+    fixture = "default OpenArm v1" if args.arm_half_separation is None else f"synthetic arm half-separation {args.arm_half_separation:.3f} m"
+    print(f"Fixture: {fixture}")
     print(f"IK/joint-margin-valid hand pairs on one object: {pairs}")
     if best is None:
         print("No common IK pose in sampled workspace")
