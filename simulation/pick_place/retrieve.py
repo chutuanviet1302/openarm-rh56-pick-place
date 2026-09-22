@@ -20,7 +20,7 @@ from simulation.pick_place.demo import Demo, run_trial
 from simulation.pick_place.episode import TrialResult
 from simulation.pick_place.kinematics import rotation_z, upright_tilt_degrees
 
-RETRIEVE_PHASES = ("perceive", "plan", "ready", "reach", "grasp", "carry_out", "release")
+RETRIEVE_PHASES = ("perceive", "plan", "ready", "reach", "grasp", "carry", "release")
 
 
 def _table_floor(xy: tuple[float, float]) -> np.ndarray:
@@ -89,8 +89,10 @@ def phase_carry_out(demo: Demo, retrieve_to: tuple[float, float]) -> None:
 
 
 def run_retrieve(demo: Demo, retrieve_to: tuple[float, float], viewer=None, stop_after: str | None = None) -> None:
-    """Run perceive -> plan -> ready -> reach -> grasp -> carry_out -> release on
-    `demo`, whose scene already has the object resting in its one basket.
+    """Run perceive -> plan -> ready -> reach -> grasp -> carry -> release on
+    `demo`, whose scene already has the object resting in its one basket. The
+    logged phase name is "carry" (matching Demo's, even though the work is
+    `phase_carry_out`) so a shared timeline/viewer needs no special case for it.
 
     IK feasibility for a heading (checked at plan time) does not say whether that
     heading actually holds the can once fingers, walls and contact forces are real;
@@ -105,7 +107,7 @@ def run_retrieve(demo: Demo, retrieve_to: tuple[float, float], viewer=None, stop
         ("ready", demo.phase_ready),
         ("reach", demo.phase_reach),
         ("grasp", demo.phase_grasp),
-        ("carry_out", lambda: phase_carry_out(demo, retrieve_to)),
+        ("carry", lambda: phase_carry_out(demo, retrieve_to)),
         ("release", demo.phase_release),
     )
     index = 0

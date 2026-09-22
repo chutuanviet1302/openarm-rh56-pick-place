@@ -30,6 +30,7 @@ import numpy as np
 from simulation.five_finger_model import BASKET_POSITION_B, PICK_POSITION_A
 from simulation.pick_place.demo import Demo, run_trial
 from simulation.pick_place.kinematics import upright_tilt_degrees
+from simulation.pick_place.retrieve import run_retrieve
 from simulation.pick_place.routing import Route, TaskRouter
 from simulation.pick_place.scene import Scene
 from simulation.vision_detector import VisionDetector
@@ -167,6 +168,96 @@ def record(args: argparse.Namespace) -> Path:
     return out_dir
 
 
+def record_retrieve(args: argparse.Namespace) -> Path:
+    """Like `record`, but for simulation.pick_place.retrieve.RetrieveDemo: one arm
+    places the object in the basket, then grasps it back out and sets it down at
+    `--retrieve-to`. Both legs are filmed by the same Recorder on one continuous
+    sim clock -- `recorder.demo` is swapped to the second leg's Demo once the
+    first is built, so the video and telemetry run straight through with no cut."""
+    name = args.name or datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = EPISODES_ROOT / name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    side = args.arm if args.arm != "auto" else "left"
+
+    place_in = Demo(pick_position=tuple(args.object), basket_position=tuple(args.basket), perception=args.perception, side=side)
+    place_in.scene.reset()
+    cameras = tuple(camera for camera in args.cameras if _has_camera(place_in.model, camera))
+    recorder = Recorder(place_in, cameras, args.fps, out_dir)
+    place_in.executor.on_step = recorder.on_step
+    started = time.perf_counter()
+    place_result = run_trial(place_in)
+
+    retrieve = None
+    failure = place_result.failure_reason
+    if place_result.success:
+        retrieve = Demo(side=side, perception=args.perception, scene=place_in.scene)
+        recorder.demo = retrieve
+        retrieve.executor.on_step = recorder.on_step
+        retrieve_to = tuple(args.retrieve_to)
+        failure = None
+        try:
+            run_retrieve(retrieve, retrieve_to)
+        except RuntimeError as error:
+            failure = str(error)
+
+    active = retrieve or place_in
+    recorder.capture(float(active.data.time))  # the final resting frame
+    recorder.close()
+    wall = time.perf_counter() - started
+
+    scene = active.scene
+    retrieve_to = tuple(args.retrieve_to)
+    final_pos = scene.object_position()
+    placement_error = float(np.linalg.norm(final_pos[:2] - np.array(retrieve_to))) if retrieve else 0.0
+    tilt = float(upright_tilt_degrees(scene.object_quaternion()))
+    if retrieve is not None and failure is None:
+        if scene.object_inside_basket():
+            failure = "object footprint is still inside the basket after set-down"
+        elif not scene.object_touches("table_top"):
+            failure = "object is not resting on the table after set-down"
+        elif tilt > 15.0:
+            failure = f"final object tilt {tilt:.1f}deg exceeds 15deg"
+
+    values = active.log.values
+    events = place_in.log.events + (retrieve.log.events if retrieve else [])
+    episode = {
+        "name": name,
+        "recorded_at": datetime.now().isoformat(timespec="seconds"),
+        "layout": {
+            "object": list(args.object), "basket": list(args.basket), "retrieve_to": list(retrieve_to),
+            "perception": args.perception, "arm": side, "mode": "retrieve",
+        },
+        "fps": args.fps,
+        "frames": recorder.frames,
+        "duration_s": round(float(scene.data.time), 3),
+        "wall_seconds": round(wall, 1),
+        "cameras": list(cameras),
+        "perception_image": None,
+        "result": {
+            "passed": failure is None,
+            "failure": failure,
+            "failed_phase": active.log.current_phase if failure else None,
+            "placement_error_mm": round(placement_error * 1000, 1),
+            "final_tilt_deg": round(tilt, 1),
+            "perception_error_mm": round(values["perception_error_m"] * 1000, 1) if "perception_error_m" in values else None,
+            "grasp_yaw_deg": values.get("grasp_yaw_deg"),
+            "place_yaw_deg": values.get("place_yaw_deg"),
+            "grasp_forces_N": values.get("grasp_forces"),
+            "proof_lift_tilt_deg": values.get("proof_lift_tilt_deg"),
+            "route": "RETRIEVE_FROM_BASKET",
+            "min_joint_margin_deg": values.get("min_joint_margin_deg"),
+            "max_penetration_mm": round(
+                (place_in.executor.max_penetration_m + (retrieve.executor.max_penetration_m if retrieve else 0.0)) * 1000, 2
+            ),
+        },
+        "events": events,
+        "telemetry": recorder.telemetry,
+    }
+    (out_dir / "episode.json").write_text(json.dumps(episode, indent=1), encoding="utf-8")
+    _update_index(name, episode)
+    return out_dir
+
+
 def _has_camera(model: mujoco.MjModel, name: str) -> bool:
     return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, name) >= 0
 
@@ -191,6 +282,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--object", type=float, nargs=2, metavar=("X", "Y"), default=list(PICK_POSITION_A))
     parser.add_argument("--basket", type=float, nargs=2, metavar=("X", "Y"), default=list(BASKET_POSITION_B))
+    parser.add_argument("--retrieve-to", type=float, nargs=2, metavar=("X", "Y"), default=None,
+                        help="record a retrieve episode instead: place at --basket, then grasp back out and "
+                             "set down here (simulation.pick_place.retrieve.RetrieveDemo)")
     parser.add_argument("--perception", action="store_true", help="object position from the head camera (RGB-D)")
     parser.add_argument("--arm", choices=("auto", "right", "left"), default="auto")
     parser.add_argument("--name", help="episode folder name (default: timestamp)")
@@ -198,7 +292,7 @@ def main() -> None:
     parser.add_argument("--cameras", nargs="+", default=list(DEFAULT_CAMERAS),
                         help=f"scene cameras to film (default {' '.join(DEFAULT_CAMERAS)}; also {' '.join(EXTRA_CAMERAS)})")
     args = parser.parse_args()
-    out_dir = record(args)
+    out_dir = record_retrieve(args) if args.retrieve_to is not None else record(args)
     print(f"\nrecorded -> {out_dir}\nview it:   python -m scripts.serve_viewer")
 
 
