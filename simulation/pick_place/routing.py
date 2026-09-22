@@ -7,6 +7,7 @@ from enum import Enum
 
 import numpy as np
 
+from simulation.pick_place.handoff import find_handoff_point
 from simulation.pick_place.planner import GraspPlanner, Plan
 from simulation.pick_place.scene import Scene
 
@@ -26,6 +27,7 @@ class RouteDecision:
     target_arm: str | None
     reason: str
     plan: Plan | None = None
+    handoff_position: tuple[float, float] | None = None
 
 
 class TaskRouter:
@@ -57,23 +59,26 @@ class TaskRouter:
             _, side, plan = max(direct, key=lambda candidate: candidate[0])
             return RouteDecision(Route[f"DIRECT_{side.upper()}"], side, side, "direct IK and clearance checks passed", plan)
 
-        pick_ok, place_ok = {}, {}
+        pick_ok = {}
         for side in ("right", "left"):
-            planner = GraspPlanner(self.scene, side)
             try:
-                pick_ok[side] = planner.plan_pick(object_position)
+                pick_ok[side] = GraspPlanner(self.scene, side).plan_pick(object_position)
             except RuntimeError as error:
                 failures.append(f"{side} pick: {str(error).splitlines()[0]}")
-            try:
-                # Probe the actual set-down planner from a known reachable pick on
-                # that arm's side; a pick probe at B is not equivalent to placing.
-                probe_pick = (0.08, -0.38 if side == "right" else 0.38)
-                probe = Scene(probe_pick, tuple(self.scene.basket_floor()[:2]))
-                place_ok[side] = GraspPlanner(probe, side).plan(probe.object_position())
-            except RuntimeError as error:
-                failures.append(f"{side} place: {str(error).splitlines()[0]}")
+        pick_xy = (float(object_position[0]), float(object_position[1]))
+        basket_xy = tuple(self.scene.basket_position)
         for source, target in (("right", "left"), ("left", "right")):
-            if source in pick_ok and target in place_ok:
-                route = Route[f"HANDOFF_{source.upper()}_TO_{target.upper()}"]
-                return RouteDecision(route, source, target, "direct route unavailable; opposite arms pass pick/place preflight")
+            if source not in pick_ok:
+                continue
+            try:
+                handoff_xy = find_handoff_point(pick_xy, basket_xy, source, target)
+            except RuntimeError as error:
+                failures.append(f"{source}->{target} handoff: {str(error).splitlines()[0]}")
+                continue
+            route = Route[f"HANDOFF_{source.upper()}_TO_{target.upper()}"]
+            return RouteDecision(
+                route, source, target,
+                f"direct route unavailable; relayed via staging point {tuple(round(v, 3) for v in handoff_xy)}",
+                handoff_position=handoff_xy,
+            )
         return RouteDecision(Route.REJECTED, None, None, "; ".join(failures))

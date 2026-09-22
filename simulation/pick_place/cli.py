@@ -20,6 +20,7 @@ import numpy as np
 from simulation.five_finger_model import BASKET_POSITION_B, PICK_POSITION_A
 from simulation.pick_place.demo import PHASES, Demo, run_trial, sample_layout
 from simulation.pick_place.episode import write_report
+from simulation.pick_place.handoff import HandoffDemo, run_handoff_trial
 from simulation.pick_place.routing import Route, TaskRouter
 from simulation.pick_place.scene import Scene
 from simulation.vision_detector import VisionDetector
@@ -82,9 +83,11 @@ def main(argv: list[str] | None = None) -> None:
     layout = dict(pick_position=tuple(args.object), basket_position=tuple(args.basket),
                   perception=args.perception, verbose=args.verbose)
 
-    def select_side(trial_layout: dict) -> tuple[str, str]:
+    def route_for(trial_layout: dict):
+        """(source_arm, reason) for a direct route, or the routing.RouteDecision
+        itself for a handoff, so the caller can build the right episode type."""
         if args.arm != "auto":
-            return args.arm, "arm selected explicitly"
+            return (args.arm, "arm selected explicitly")
         scene = Scene(trial_layout["pick_position"], trial_layout["basket_position"])
         observed = None
         if args.perception:
@@ -93,22 +96,50 @@ def main(argv: list[str] | None = None) -> None:
                 raise RuntimeError("route selection failed: object not found by d435_head")
             observed = detection.pos_world
         decision = TaskRouter(scene).select(observed)
-        if decision.route not in (Route.DIRECT_RIGHT, Route.DIRECT_LEFT):
+        if decision.route == Route.REJECTED:
             raise RuntimeError(f"{decision.route.value}: {decision.reason}")
         print(f"route: {decision.route.value} — {decision.reason}")
-        return decision.source_arm, decision.reason
+        if decision.route in (Route.DIRECT_RIGHT, Route.DIRECT_LEFT):
+            return (decision.source_arm, decision.reason)
+        return decision
 
-    def build_demo(trial_layout: dict) -> Demo:
-        side, reason = select_side(trial_layout)
-        demo = Demo(**trial_layout, side=side)
-        demo.route_reason = reason
-        return demo
+    def build_episode(trial_layout: dict) -> Demo | HandoffDemo:
+        """A plain Demo for a direct route, or a HandoffDemo that relays the object
+        through a staging point when no single arm can reach both pick and basket."""
+        route = route_for(trial_layout)
+        if isinstance(route, tuple):
+            side, reason = route
+            demo = Demo(**trial_layout, side=side)
+            demo.route_reason = reason
+            return demo
+        decision = route
+        handoff = HandoffDemo(
+            trial_layout["pick_position"], trial_layout["basket_position"],
+            source_arm=decision.source_arm, target_arm=decision.target_arm,
+            handoff_position=decision.handoff_position,
+            perception=trial_layout["perception"], verbose=trial_layout["verbose"],
+        )
+        handoff.route_reason = decision.reason
+        return handoff
+
+    def run_episode(episode: Demo | HandoffDemo, viewer=None, stop_after: str | None = None):
+        if isinstance(episode, HandoffDemo):
+            return run_handoff_trial(episode, viewer, stop_after=stop_after)
+        return run_trial(episode, viewer, stop_after=stop_after)
 
     if args.plan_only:
-        demo = build_demo(layout)
-        demo.phase_perceive()
-        plan = demo.planner.plan(demo.object_position())
-        print(demo.planner.describe(plan))
+        episode = build_episode(layout)
+        if isinstance(episode, HandoffDemo):
+            episode.leg1.phase_perceive()
+            print(f"-- leg 1: {episode.source_arm} carries pick -> staging point {episode.handoff_position} --")
+            print(episode.leg1.planner.describe(episode.leg1.planner.plan(episode.leg1.object_position())))
+            leg2_probe = Demo(episode.handoff_position, episode.basket_position, side=episode.target_arm)
+            print(f"-- leg 2: {episode.target_arm} carries staging point -> basket (planned from the nominal staging pose) --")
+            print(leg2_probe.planner.describe(leg2_probe.planner.plan(leg2_probe.object_position())))
+            return
+        episode.phase_perceive()
+        plan = episode.planner.plan(episode.object_position())
+        print(episode.planner.describe(plan))
         return
 
     if args.headless:
@@ -119,10 +150,13 @@ def main(argv: list[str] | None = None) -> None:
             if args.randomize:
                 sample_side = args.arm if args.arm != "auto" else ("right" if index % 2 else "left")
                 trial_layout.update(sample_layout(rng, side=sample_side, perception=args.perception))
-            demo = build_demo(trial_layout)
+            episode = build_episode(trial_layout)
             if args.trace:
-                install_trace(demo, args.trace)
-            result = run_trial(demo, stop_after=args.stop_after)
+                if isinstance(episode, HandoffDemo):
+                    print("  (--trace is not supported for a handoff route; skipped)")
+                else:
+                    install_trace(episode, args.trace)
+            result = run_episode(episode, stop_after=args.stop_after)
             print(f"  trial {index}: {result.summary()}")
             results.append(result)
         write_report(results, args.report)
@@ -132,42 +166,55 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         return
 
-    demo = build_demo(layout)
-    if args.trace:
-        install_trace(demo, args.trace)
-    # Pressing R in the window restarts the episode: the scene is reset to its start
-    # state (attention stance, object back at A) and the whole sequence runs again.
-    restart_requested = [False]
+    episode = build_episode(layout)
+    if args.trace and not isinstance(episode, HandoffDemo):
+        install_trace(episode, args.trace)
 
-    def on_key(keycode: int) -> None:
-        if keycode in (ord("R"), ord("r")):
-            restart_requested[0] = True
+    def watch(demo: Demo, stop_after: str | None, label: str) -> None:
+        # Pressing R in the window restarts the episode: the scene is reset to its
+        # start state and the whole sequence runs again.
+        restart_requested = [False]
 
-    with mujoco.viewer.launch_passive(demo.model, demo.data, key_callback=on_key) as viewer:
-        if args.camera == "free":
-            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-        else:
-            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
-            viewer.cam.fixedcamid = demo.model.camera(args.camera).id
-        print(
-            f"[Camera] '{args.camera}'.  Keys in the MuJoCo window:  [ / ] = previous / next camera   "
-            "Esc = free camera (left-drag rotate, right-drag zoom, middle-drag pan)   Space = pause   "
-            "R = run the episode again   Tab = side panel"
+        def on_key(keycode: int) -> None:
+            if keycode in (ord("R"), ord("r")):
+                restart_requested[0] = True
+
+        with mujoco.viewer.launch_passive(demo.model, demo.data, key_callback=on_key) as viewer:
+            if args.camera == "free":
+                viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+            else:
+                viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+                viewer.cam.fixedcamid = demo.model.camera(args.camera).id
+            print(
+                f"[Camera] '{args.camera}' -- {label}.  Keys in the MuJoCo window:  [ / ] = previous / next "
+                "camera   Esc = free camera (left-drag rotate, right-drag zoom, middle-drag pan)   Space = "
+                "pause   R = run the episode again   Tab = side panel   close the window to continue"
+            )
+            run = 0
+            while viewer.is_running():
+                run += 1
+                print(f"=== {label}, run {run} ===")
+                result = run_trial(demo, viewer, stop_after=stop_after)
+                print(f"  result: {result.summary()}")
+                if not result.success:
+                    print("   the scene is left as-is -- rotate the view to inspect the hand")
+                print("   press R in the window to run again, or close it to continue")
+                restart_requested[0] = False
+                while viewer.is_running() and not restart_requested[0]:
+                    mujoco.mj_step(demo.model, demo.data)
+                    viewer.sync()
+                    time.sleep(0.01)
+                if not viewer.is_running():
+                    break
+                demo.restart()
+
+    if isinstance(episode, HandoffDemo):
+        watch(episode.leg1, None, f"leg 1: {episode.source_arm} -> staging point {episode.handoff_position}")
+        handoff_xy = episode.leg1.scene.object_position()[:2].copy()
+        episode.leg2 = Demo(
+            (float(handoff_xy[0]), float(handoff_xy[1])), episode.basket_position,
+            perception=episode.perception, verbose=episode.verbose, side=episode.target_arm,
         )
-        episode = 0
-        while viewer.is_running():
-            episode += 1
-            print(f"=== episode {episode} ===")
-            result = run_trial(demo, viewer, stop_after=args.stop_after)
-            print(f"  result: {result.summary()}")
-            if not result.success:
-                print("   the scene is left as-is -- rotate the view to inspect the hand")
-            print("   press R in the window to run again")
-            restart_requested[0] = False
-            while viewer.is_running() and not restart_requested[0]:
-                mujoco.mj_step(demo.model, demo.data)
-                viewer.sync()
-                time.sleep(0.01)
-            if not viewer.is_running():
-                break
-            demo.restart()
+        watch(episode.leg2, args.stop_after, f"leg 2: {episode.target_arm} -> basket")
+    else:
+        watch(episode, args.stop_after, f"{episode.side} arm, direct")

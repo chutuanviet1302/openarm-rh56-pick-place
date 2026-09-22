@@ -21,9 +21,42 @@ class BimanualRoutingTests(unittest.TestCase):
         decision = TaskRouter(Scene()).select()
         self.assertEqual(decision.route, Route.DIRECT_RIGHT)
 
-    def test_router_requests_handoff_for_opposite_workspaces(self):
+    def test_router_rejects_opposite_workspaces_no_staging_point_reachable(self):
+        """Both hand-off strategies were audited and neither works on this rig:
+        simultaneous bimanual grasp collides (scripts/check_handoff_geometry.py,
+        >=22.7mm inter-hand penetration in every sampled pose) and a sequential
+        relay has no staging point either, because grasping and placing have very
+        different reach envelopes -- a held object can be *placed* to within about
+        2cm of the centreline, but freshly *grasping* one needs roughly 30cm of
+        clearance from it (the arm runs out of joint margin closer in, independent
+        of which yaw is tried; see docs/PROJECT_REPORT.md). No table point is both
+        reachable as a placement for the source arm and a pick-up for the target,
+        so the router correctly falls back to REJECTED instead of proposing a
+        handoff it cannot execute."""
         decision = TaskRouter(Scene((0.08, -0.38), (0.25, 0.25))).select()
-        self.assertEqual(decision.route, Route.HANDOFF_RIGHT_TO_LEFT)
+        self.assertEqual(decision.route, Route.REJECTED)
+        self.assertIn("handoff", decision.reason)
+
+    def test_find_handoff_point_returns_first_candidate_reachable_by_both_arms(self):
+        """No layout in the sampled workspace actually has a usable staging point
+        (see the REJECTED test above), so this exercises the search itself --
+        first-candidate-wins over the (x, y) grid, both legs checked -- against a
+        stubbed reachability check rather than a real, currently nonexistent,
+        physical instance."""
+        from simulation.pick_place import handoff as handoff_module
+
+        seen = []
+
+        def fake_reachable(pick_position, place_position, side):
+            seen.append((pick_position, place_position, side))
+            return True
+
+        with patch.object(handoff_module, "_leg_reachable", side_effect=fake_reachable):
+            staging = handoff_module.find_handoff_point((0.08, -0.38), (0.25, 0.25), "right", "left")
+        self.assertAlmostEqual(staging[0], handoff_module.HANDOFF_X_RANGE[0])
+        self.assertAlmostEqual(staging[1], handoff_module.HANDOFF_Y_RANGE[0])
+        self.assertEqual(seen[0], ((0.08, -0.38), staging, "right"))
+        self.assertEqual(seen[1], (staging, (0.25, 0.25), "left"))
 
     def test_head_camera_sees_mirrored_left_workspace(self):
         scene = Scene((0.08, 0.38), (0.25, 0.25))

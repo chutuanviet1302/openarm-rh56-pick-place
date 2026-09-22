@@ -265,3 +265,15 @@ ros2 run openarm_pick_place mujoco_bridge --ros-args -p config_path:=$PWD/config
 - Quét handoff tĩnh với hai wrist target riêng và ràng buộc hai tâm kẹp nằm trong chiều cao 100 mm của vật: 116 cặp có IK/joint margin nhưng tốt nhất vẫn xuyên nhau 22.7 mm tại 53 contact (`python -m scripts.check_handoff_geometry`). Direct handoff chưa có pose vật lý an toàn với collision mesh hiện tại.
 
 - Success placement được đánh giá theo containment trong lòng rổ + contact đáy, không bắt buộc tâm rổ. Tay trái containment benchmark đạt 10/10: artifacts/benchmarks/left-containment-10.json.
+
+## Cập nhật handoff (tiếp sức qua điểm trung chuyển) 22/09/2026
+- Yêu cầu: tay phải cầm vật -> chuyển cho tay trái -> tay trái đặt vào rổ. Hai hướng đã thử, cả hai đều bị chặn vật lý (không phải lỗi code):
+  1. Hai tay cùng nắm vật đồng thời: đã biết thất bại từ trước (22.7mm xuyên tay).
+  2. Tiếp sức tuần tự qua 1 điểm trung chuyển trên bàn (đã cài `simulation/pick_place/handoff.py` + `find_handoff_point` + `HANDOFF_*` route thực thi được trong `cli.py`): quét lại phát hiện **đặt** (khi đang cầm) chỉ với tới y≈0 (đường tâm bàn, đã quét x tới 0.65m không cải thiện), còn **nắm mới** một vật cần y >= ~0.30-0.33m tính từ tâm (grasp joint margin về 0 ngay khi gần tâm, không phụ thuộc x). Không có điểm nào vừa đặt được vừa nắm ra được -> không tồn tại điểm trung chuyển khả thi cho layout đối xứng (vật và rổ ở hai phía đối nhau).
+  3. Ý tưởng của mentor "đặt rổ giữa bàn, phải cho vào - trái lấy ra" đã kiểm tra và **bị chặn bởi đúng giới hạn ở mục 2** (rổ giữa bàn vẫn cần trái nắm ra ở y gần 0, không khả thi).
+- Router (`TaskRouter.select`) giờ trả `REJECTED` kèm lý do rõ ràng khi cả hai chiến lược trên đều fail, thay vì đề xuất một route không chạy được.
+- Việc cần làm tiếp nếu muốn giải quyết thật: (a) chiến lược grasp/carry khác (không phải top-down/wrist-straight) cho vùng gần tâm, hoặc (c) chấp nhận giới hạn hiện tại và để router trả REJECTED.
+- **(b) đã đào sâu 2 vòng, đính chính lại kết luận ban đầu:**
+  - Vòng 1 (60 seed ngẫu nhiên/điểm): 75% quãng đường transfer (y=-0.036, gần tâm) → 0/60 hội tụ. Kết luận vội vàng lúc đó: "giới hạn động học cứng". **Sai — do mẫu quá nhỏ.**
+  - Vòng 2 (300 seed/điểm x4 run độc lập + quét z 0.10-0.65m + 35 seed có cấu trúc quanh tư thế chuẩn): đúng điểm đó, 2/4 run 300-seed tìm ra nghiệm (margin 12.6° và 8.3°), 2 run kia 0/300; seed có cấu trúc quanh tư thế chuẩn 0/35; quét z không có xu hướng theo chiều cao (không phải do "robot cao/thấp"). Nghiệm tồn tại nhưng trên nhánh cấu hình rất hẹp/bất thường (joint7 lệch >70° so với chuẩn).
+  - **Kết luận đúng:** đây là rìa vùng với-tới (workspace boundary), không phải giới hạn tuyệt đối cũng không phải bug seeding vài-seed-là-xong — cần hàng trăm seed/waypoint mới có ~1/600 cơ hội, không thực tế cho planner thời gian thực, và tư thế tìm được cũng không đủ ổn định để đi qua trong quỹ đạo liên tục. Sửa `_walk`/`transfer_route_candidates` bằng vài seed dự phòng sẽ không giải quyết được. Muốn mở khoá thật cần (a) — grasp/carry khác hẳn top-down/wrist-straight cho vùng gần tâm.
