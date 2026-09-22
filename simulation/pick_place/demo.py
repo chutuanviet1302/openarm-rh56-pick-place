@@ -278,21 +278,27 @@ class Demo:
                         target + np.array([0.0, 0.04, 0.0]),
                     ]
                     chosen = None
-                    for candidate in candidates:
-                        try:
-                            q = solve_pose_ik(self.model, side, candidate, self.planner.orientation, seed)
-                            margin = self.planner.joint_margin_degrees(q)
-                            if margin < C.MIN_JOINT_MARGIN_DEG:
+                    yaw_candidates = [plan.place_yaw_deg, -90.0, -60.0, -30.0, 0.0, 30.0, 60.0, 90.0]
+                    for yaw in dict.fromkeys(yaw_candidates):
+                        orientation = rotation_z(yaw) @ self.planner.orientation
+                        for candidate in candidates:
+                            try:
+                                q = solve_pose_ik(self.model, side, candidate, orientation, seed)
+                                margin = self.planner.joint_margin_degrees(q)
+                                if margin < C.MIN_JOINT_MARGIN_DEG:
+                                    continue
+                                if self.planner.hand_contacts(q, scene.basket_geoms, closed=True):
+                                    continue
+                                chosen = (candidate, q, yaw, orientation)
+                                break
+                            except RuntimeError:
                                 continue
-                            if self.planner.hand_contacts(q, scene.basket_geoms, closed=True):
-                                continue
-                            chosen = (candidate, q)
+                        if chosen is not None:
                             break
-                        except RuntimeError:
-                            continue
                     if chosen is None:
                         raise RuntimeError("no intermediate left-arm centring pose passed IK/collision")
-                    candidate, centre_joints = chosen
+                    candidate, centre_joints, chosen_yaw, chosen_orientation = chosen
+                    plan.place_yaw_deg = chosen_yaw
                     if not np.allclose(candidate, current):
                         ex.move_to({arm: centre_joints}, C.SET_DOWN_CENTRING_SECONDS)
                     # Refine residual error with small midpoint moves; this keeps each
@@ -306,7 +312,7 @@ class Demo:
                         step_target[:2] -= 0.5 * residual
                         try:
                             step_q = solve_pose_ik(
-                                self.model, side, step_target, self.planner.orientation,
+                                self.model, side, step_target, chosen_orientation,
                                 self.data.ctrl[scene.arm_actuators[side]].copy(),
                             )
                             if self.planner.hand_contacts(step_q, scene.basket_geoms, closed=True):
@@ -321,7 +327,7 @@ class Demo:
                     lower_target[2] = plan.centers["lower"][2]
                     lower_joints = solve_pose_ik(
                         self.model, side, lower_target,
-                        rotation_z(plan.place_yaw_deg) @ self.planner.orientation,
+                        chosen_orientation,
                         self.data.ctrl[scene.arm_actuators[side]].copy(),
                     )
                     lower_path = self.planner._walk(
