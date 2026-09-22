@@ -88,6 +88,11 @@ Các lỗi tay trái hiện tập trung ở release/set-down. Sửa camera đã 
 - `_centre_over_basket` thử giải IK lateral từ pose nâng 30 mm để tránh biên IK/thành rổ; sau đó hạ về cao độ ban đầu nếu có thể. Nếu pose hạ không khả thi, hệ thống hoàn nguyên pose trước centring để vẫn giữ contact physics và ghi rõ lỗi.
 - Smoke mới tay trái: 1/2; ca còn lại vẫn release lệch khoảng 38.2 mm khi pose hạ không khả thi (`artifacts/benchmarks/left-v2-fixed-smoke3.json`). Chưa đủ điều kiện chạy 50 ca.
 
+
+### Carry-height centring patch
+
+`phase_carry()` now attempts left-arm centring immediately after the high transfer, before the low lower path. It validates IK and basket collision, then rebuilds the lower path from the post-centring joint state. If the carry-height target is unreachable, the episode records `left carry-height centring rejected` and follows the existing safe fallback; it does not teleport or force a release. Smoke result: `artifacts/benchmarks/left-carry-centering-smoke.json` = 1/2, showing the remaining issue is left-arm workspace/IK for targets near the basket edge.
+
 ## 5. Chưa hoàn thành
 
 ### Cổng benchmark

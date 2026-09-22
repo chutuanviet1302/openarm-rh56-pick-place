@@ -260,3 +260,5 @@ ros2 run openarm_pick_place mujoco_bridge --ros-args -p config_path:=$PWD/config
 - Full handoff collision-free chưa triển khai; pose sweep hiện chưa đạt điều kiện an toàn.
 
 - 23/09/2026: centring trái thử pose nâng 30 mm, hạ lại nếu IK cho phép; smoke 1/2, release vẫn còn lỗi khi hạ pose không khả thi.
+
+- 23/09/2026: phase_carry thử centring tay trái ở carry height và re-plan lower path; target gần mép rổ vẫn bị IK reject, smoke 1/2.

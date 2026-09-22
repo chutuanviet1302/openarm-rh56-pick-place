@@ -253,6 +253,45 @@ class Demo:
         path = plan.paths["transfer"]
         ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
         self._check_carry_clearance("transfer")
+        # Re-centre at carry height, before entering the basket.  The old lower path
+        # was solved from a stale held offset; using it after a lateral correction
+        # made the left wrist enter the rim with no valid IK escape.
+        if side == "left":
+            from simulation.pick_place.kinematics import solve_pose_ik
+
+            error = scene.object_position()[:2] - scene.basket_floor()[:2]
+            if float(np.linalg.norm(error)) > C.SET_DOWN_CENTRING_TOLERANCE:
+                current = scene.wrist_position(side)
+                target = current.copy()
+                target[:2] -= error
+                try:
+                    centre_joints = solve_pose_ik(
+                        self.model, side, target, self.planner.orientation,
+                        self.data.ctrl[scene.arm_actuators[side]].copy(),
+                    )
+                    if self.planner.hand_contacts(centre_joints, scene.basket_geoms, closed=True):
+                        raise RuntimeError("centred carry pose intersects basket")
+                    ex.move_to({arm: centre_joints}, C.SET_DOWN_CENTRING_SECONDS)
+                    self.log.record("carry_centring_error_m", error)
+                    self.log.note(f"left carry-height centring corrected {np.linalg.norm(error)*1000:.1f}mm")
+                    # Rebuild the lower path from the actual post-centring joint state.
+                    lower_target = scene.wrist_position(side).copy()
+                    lower_target[2] = plan.centers["lower"][2]
+                    lower_joints = solve_pose_ik(
+                        self.model, side, lower_target,
+                        rotation_z(plan.place_yaw_deg) @ self.planner.orientation,
+                        self.data.ctrl[scene.arm_actuators[side]].copy(),
+                    )
+                    lower_path = self.planner._walk(
+                        scene.wrist_position(side), lower_target,
+                        self.data.ctrl[scene.arm_actuators[side]].copy(), C.CARRY_PATH_STEPS,
+                        orientation_at=lambda f, yaw=plan.place_yaw_deg:
+                            rotation_z(yaw) @ self.planner.orientation,
+                    )
+                    plan.paths["lower"] = lower_path
+                    plan.joints["lower"] = lower_joints
+                except RuntimeError as error:
+                    self.log.note(f"left carry-height centring rejected: {str(error).splitlines()[0]}")
         self.log.note("lowering the object into the basket")
         path = plan.paths["lower"]
         ex.follow({arm: path}, [C.LOWER_SECONDS / len(path)] * len(path))
