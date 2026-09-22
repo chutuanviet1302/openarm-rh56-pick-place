@@ -321,6 +321,10 @@ class Demo:
     def phase_release(self) -> None:
         ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
         arm, hand = f"{side}_arm", f"{side}_hand"
+        object_before = scene.object_position().copy()
+        wrist_before = scene.wrist_position(side).copy()
+        self.log.record("release_object_before_m", object_before)
+        self.log.record("release_wrist_before_m", wrist_before)
         # The object already rests on the basket floor (phase_carry). Release in three
         # steps, measured across four cases (two layouts, with and without RGB-D;
         # placement 1-12mm, every other ordering tried was worse, up to toppling the
@@ -334,9 +338,19 @@ class Demo:
             # The mirrored RH56 collision geometry releases cleanly by opening first;
             # coupling opening to the retreat sweeps its index side through the can.
             ex.open_fingers(side, C.ALL_FINGERS, C.RELEASE_SECONDS)
+            object_after_open = scene.object_position().copy()
             ex.move_to({arm: plan["transfer"]}, C.RETREAT_SECONDS)
         else:
             ex.move_to({hand: scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS), arm: plan["transfer"]}, C.RETREAT_SECONDS)
+            object_after_open = scene.object_position().copy()
+        object_after_retreat = scene.object_position().copy()
+        wrist_after_retreat = scene.wrist_position(side).copy()
+        self.log.record("release_object_after_open_m", object_after_open)
+        self.log.record("release_object_after_retreat_m", object_after_retreat)
+        self.log.record("release_wrist_after_retreat_m", wrist_after_retreat)
+        self.log.record("release_open_displacement_m", float(np.linalg.norm(object_after_open - object_before)))
+        self.log.record("release_retreat_displacement_m", float(np.linalg.norm(object_after_retreat - object_after_open)))
+        self.log.record("release_lateral_drift_m", float(np.linalg.norm((object_after_retreat - object_before)[:2])))
         ex.open_fingers(side, ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
         # Continue home after clearing the basket.
         ex.move_to({arm: plan["hover"], hand: scene.closed_hand[side]}, C.RETURN_SECONDS)
@@ -505,6 +519,14 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
         proof_lift_tilt_deg=values.get("proof_lift_tilt_deg"),
         carry_clearance_above_rim_m=values.get("carry_clearance_above_rim_m"),
         place_yaw_deg=values.get("place_yaw_deg"),
+        release_object_before_m=values.get("release_object_before_m"),
+        release_object_after_open_m=values.get("release_object_after_open_m"),
+        release_object_after_retreat_m=values.get("release_object_after_retreat_m"),
+        release_wrist_before_m=values.get("release_wrist_before_m"),
+        release_wrist_after_retreat_m=values.get("release_wrist_after_retreat_m"),
+        release_open_displacement_m=values.get("release_open_displacement_m"),
+        release_retreat_displacement_m=values.get("release_retreat_displacement_m"),
+        release_lateral_drift_m=values.get("release_lateral_drift_m"),
         phase_wrist_positions=values.get("phase_wrist_positions"),
         phase_joint_targets=values.get("phase_joint_targets"),
         phase_observations=demo.log.observations,

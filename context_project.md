@@ -253,3 +253,8 @@ ros2 run openarm_pick_place mujoco_bridge --ros-args -p config_path:=$PWD/config
 - [BAO_CAO_MENTOR.md](BAO_CAO_MENTOR.md) — báo cáo gửi mentor, đối chiếu pipeline + câu hỏi (18/09/2026)
 - `scripts/make_benchmark_fixture.py`, `scripts/benchmark_pick_place.py` — công cụ fixture/benchmark Stage 2 (mục 0.5), docstring trong từng file giải thích đầy đủ lý do thiết kế
 - `_bench.log` (thư mục gốc, gitignored/tạm) — log benchmark 50-layout đang chạy lúc ghi tài liệu này; xóa sau khi đọc kết quả
+
+## Cập nhật thực thi 22/09/2026
+- Đã chạy vòng benchmark mới có perception: tay phải 9/10 (rtifacts/benchmarks/right-v2-next-10.json), tay trái 3/10 (rtifacts/benchmarks/left-v2-next-10.json). Chưa đủ điều kiện chạy 50 ca.
+- TrialResult bổ sung telemetry release object/wrist trước mở, sau mở và sau retreat để phân tích hướng drift.
+- Full handoff collision-free chưa triển khai; pose sweep hiện chưa đạt điều kiện an toàn.

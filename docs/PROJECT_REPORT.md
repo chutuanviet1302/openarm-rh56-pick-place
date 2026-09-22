@@ -1,6 +1,6 @@
 # Báo cáo trạng thái OpenArm + Inspire RH56 + D435
 
-Cập nhật: 22/09/2026
+Cập nhật: 22/09/2026 (sau vòng telemetry tiếp theo)
 
 ## 1. Phạm vi dự án
 
@@ -69,7 +69,9 @@ ROS 2 và MoveIt 2 được giữ như lớp tích hợp riêng. Cổng nghiệm
 | Demo tay phải mặc định + perception | 1/1, placement khoảng 4 mm, tilt 0°, perception khoảng 2.2 mm | `artifacts/demo-current.json` |
 | Smoke tay phải fixture v2 | 3/3 | `artifacts/benchmarks/right-v2-smoke.json` |
 | Kiểm tra tay phải 10 ca fixture v2 | 6/10 | `artifacts/benchmarks/right-v2-check.json` |
+| Vòng tiếp theo tay phải có perception | 9/10 | `artifacts/benchmarks/right-v2-next-10.json` |
 | Kiểm tra tay trái 10 ca sau sửa camera | 3/10 | `artifacts/benchmarks/left-v2-camera-check.json` |
+| Vòng tiếp theo tay trái có perception | 3/10 | `artifacts/benchmarks/left-v2-next-10.json` |
 | Test routing + MuJoCo bridge | 10/10 | terminal test output |
 | Handoff pose search | Chưa có pose an toàn; ứng viên tốt nhất 11 contact, xuyên 24.7 mm | telemetry pose sweep |
 
@@ -79,7 +81,7 @@ Các lỗi tay phải còn lại tập trung ở:
 - vật tụt trong transfer;
 - placement sát hoặc vượt ngưỡng 20 mm.
 
-Các lỗi tay trái hiện tập trung ở release/set-down. Sửa camera đã đưa perception error về khoảng 0.2–0.9 mm nhưng chưa sửa được dịch chuyển vật khi nhả.
+Các lỗi tay trái hiện tập trung ở release/set-down. Sửa camera đã đưa perception error về khoảng 0.2–1.0 mm nhưng chưa sửa được dịch chuyển vật khi nhả. Vòng mới 3/10 cho thấy một số ca bỏ qua centring do IK trái thất bại; các ca lỗi có placement 22.6–45.0 mm. Trial mới ghi thêm vector object/wrist trước mở ngón, sau mở ngón và sau retreat (`release_*`) để phân biệt drift do mở ngón với drift do rút tay.
 
 ## 5. Chưa hoàn thành
 

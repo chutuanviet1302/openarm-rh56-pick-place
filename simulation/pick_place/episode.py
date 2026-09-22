@@ -41,6 +41,14 @@ class TrialResult:
     proof_lift_tilt_deg: float | None = None
     carry_clearance_above_rim_m: float | None = None
     place_yaw_deg: float | None = None
+    release_object_before_m: list[float] | None = None
+    release_object_after_open_m: list[float] | None = None
+    release_object_after_retreat_m: list[float] | None = None
+    release_wrist_before_m: list[float] | None = None
+    release_wrist_after_retreat_m: list[float] | None = None
+    release_open_displacement_m: float | None = None
+    release_retreat_displacement_m: float | None = None
+    release_lateral_drift_m: float | None = None
     # Wrist target per phase (world frame) and the joint solution that reaches it
     phase_wrist_positions: dict[str, list[float]] | None = None
     phase_joint_targets: dict[str, list[float]] | None = None
