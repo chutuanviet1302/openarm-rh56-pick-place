@@ -233,6 +233,7 @@ class Demo:
     def phase_carry(self) -> None:
         ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
         arm = f"{side}_arm"
+        from simulation.pick_place.kinematics import rotation_z, solve_pose_ik
         ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
         clearance = self._check_carry_clearance("lift")
         # Re-plan the set-down from where the object actually sits in the hand: the
@@ -257,21 +258,43 @@ class Demo:
         # was solved from a stale held offset; using it after a lateral correction
         # made the left wrist enter the rim with no valid IK escape.
         if side == "left":
-            from simulation.pick_place.kinematics import solve_pose_ik
-
             error = scene.object_position()[:2] - scene.basket_floor()[:2]
             if float(np.linalg.norm(error)) > C.SET_DOWN_CENTRING_TOLERANCE:
                 current = scene.wrist_position(side)
                 target = current.copy()
                 target[:2] -= error
                 try:
-                    centre_joints = solve_pose_ik(
-                        self.model, side, target, self.planner.orientation,
-                        self.data.ctrl[scene.arm_actuators[side]].copy(),
-                    )
-                    if self.planner.hand_contacts(centre_joints, scene.basket_geoms, closed=True):
-                        raise RuntimeError("centred carry pose intersects basket")
-                    ex.move_to({arm: centre_joints}, C.SET_DOWN_CENTRING_SECONDS)
+                    seed = self.data.ctrl[scene.arm_actuators[side]].copy()
+                    # A single large lateral move is often outside the mirrored
+                    # left-arm IK basin. Try an intermediate approach and small
+                    # approach-axis offsets before rejecting the placement.
+                    delta = target - current
+                    candidates = [
+                        current + 0.5 * delta,
+                        target,
+                        target + np.array([0.04, 0.0, 0.0]),
+                        target + np.array([-0.04, 0.0, 0.0]),
+                        target + np.array([0.0, -0.04, 0.0]),
+                        target + np.array([0.0, 0.04, 0.0]),
+                    ]
+                    chosen = None
+                    for candidate in candidates:
+                        try:
+                            q = solve_pose_ik(self.model, side, candidate, self.planner.orientation, seed)
+                            margin = self.planner.joint_margin_degrees(q)
+                            if margin < C.MIN_JOINT_MARGIN_DEG:
+                                continue
+                            if self.planner.hand_contacts(q, scene.basket_geoms, closed=True):
+                                continue
+                            chosen = (candidate, q)
+                            break
+                        except RuntimeError:
+                            continue
+                    if chosen is None:
+                        raise RuntimeError("no intermediate left-arm centring pose passed IK/collision")
+                    candidate, centre_joints = chosen
+                    if not np.allclose(candidate, current):
+                        ex.move_to({arm: centre_joints}, C.SET_DOWN_CENTRING_SECONDS)
                     self.log.record("carry_centring_error_m", error)
                     self.log.note(f"left carry-height centring corrected {np.linalg.norm(error)*1000:.1f}mm")
                     # Rebuild the lower path from the actual post-centring joint state.
@@ -296,8 +319,6 @@ class Demo:
         path = plan.paths["lower"]
         ex.follow({arm: path}, [C.LOWER_SECONDS / len(path)] * len(path))
         # Set the object down for real: keep descending until it rests on the floor.
-        from simulation.pick_place.kinematics import rotation_z
-
         orientation = rotation_z(plan.place_yaw_deg) @ self.planner.orientation
         self._centre_over_basket(orientation)
         # Stop only once the object stands flat: a can held slightly tilted touches the
