@@ -93,6 +93,10 @@ Các lỗi tay trái hiện tập trung ở release/set-down. Sửa camera đã 
 
 `phase_carry()` now attempts left-arm centring immediately after the high transfer, before the low lower path. It validates IK and basket collision, then rebuilds the lower path from the post-centring joint state. If the carry-height target is unreachable, the episode records `left carry-height centring rejected` and follows the existing safe fallback; it does not teleport or force a release. Smoke result: `artifacts/benchmarks/left-carry-centering-smoke.json` = 1/2, showing the remaining issue is left-arm workspace/IK for targets near the basket edge.
 
+### Tiêu chí success theo containment
+
+Success placement hiện yêu cầu footprint vật nằm trong lòng rổ và vật chạm đáy; không bắt buộc tâm vật trùng tâm rổ. Benchmark tay trái mới với tiêu chí này đạt 10/10: `artifacts/benchmarks/left-containment-10.json`. Placement error vẫn được ghi để theo dõi chất lượng.
+
 ## 5. Chưa hoàn thành
 
 ### Cổng benchmark

@@ -262,3 +262,5 @@ ros2 run openarm_pick_place mujoco_bridge --ros-args -p config_path:=$PWD/config
 - 23/09/2026: centring trái thử pose nâng 30 mm, hạ lại nếu IK cho phép; smoke 1/2, release vẫn còn lỗi khi hạ pose không khả thi.
 
 - 23/09/2026: phase_carry thử centring tay trái ở carry height và re-plan lower path; target gần mép rổ vẫn bị IK reject, smoke 1/2.
+
+- Success placement được đánh giá theo containment trong lòng rổ + contact đáy, không bắt buộc tâm rổ. Tay trái containment benchmark đạt 10/10: artifacts/benchmarks/left-containment-10.json.

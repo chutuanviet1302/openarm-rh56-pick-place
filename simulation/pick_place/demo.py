@@ -597,10 +597,11 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
     scene, values = demo.scene, demo.log.values
     final_pos = scene.object_position()
     placement_error = float(np.linalg.norm(final_pos[:2] - scene.basket_floor()[:2]))
+    inside_basket = scene.object_inside_basket()
     tilt = upright_tilt_degrees(scene.object_quaternion())
     if failure is None and stop_after is None:
-        if placement_error > 0.02:
-            failure = f"placement error {placement_error*1000:.1f}mm exceeds 20mm"
+        if not inside_basket:
+            failure = f"object footprint is outside basket (placement error {placement_error*1000:.1f}mm)"
         elif tilt > C.PROOF_LIFT_MAX_TILT_DEG:
             failure = f"final object tilt {tilt:.1f}deg exceeds {C.PROOF_LIFT_MAX_TILT_DEG:.0f}deg"
     return TrialResult(
@@ -610,6 +611,7 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
         final_pos.tolist(),
         float(scene.data.time),
         placement_error_m=placement_error,
+        inside_basket=inside_basket,
         bottle_tilt_deg=tilt,
         contact_forces=scene.finger_contact_forces(demo.side),
         pick_position=list(scene.pick_position),

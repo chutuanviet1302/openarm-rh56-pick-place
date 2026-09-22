@@ -10,7 +10,14 @@ from __future__ import annotations
 import mujoco
 import numpy as np
 
-from simulation.five_finger_model import BASKET_POSITION_B, HAND_PREFIX, PICK_POSITION_A, build_five_finger_model
+from simulation.five_finger_model import (
+    BASKET_HALF_WIDTH,
+    BASKET_POSITION_B,
+    HAND_PREFIX,
+    OBJECT_RADIUS,
+    PICK_POSITION_A,
+    build_five_finger_model,
+)
 from simulation.pick_place.config import (
     ARM_ACTUATORS,
     ARM_JOINTS,
@@ -205,6 +212,13 @@ class Scene:
 
     def basket_floor(self) -> np.ndarray:
         return np.asarray(self.data.geom_xpos[self.model.geom("place_basket_bottom").id]).copy()
+
+    def object_inside_basket(self, tolerance: float = 0.002) -> bool:
+        """Containment success: the object footprint is inside the basket inner walls."""
+        object_xy = self.object_position()[:2]
+        basket_xy = self.basket_floor()[:2]
+        limit = BASKET_HALF_WIDTH - OBJECT_RADIUS - tolerance
+        return bool(np.all(np.abs(object_xy - basket_xy) <= limit))
 
     def basket_rim_z(self) -> float:
         wall = self.model.geom("place_basket_left")

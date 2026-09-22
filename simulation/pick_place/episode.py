@@ -25,6 +25,7 @@ class TrialResult:
     final_position: list[float]
     simulation_seconds: float
     placement_error_m: float = 0.0
+    inside_basket: bool = False
     bottle_tilt_deg: float = 0.0
     contact_forces: dict[str, float] | None = None
     # Layout and perception
