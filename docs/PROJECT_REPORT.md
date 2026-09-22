@@ -134,6 +134,19 @@ Yêu cầu cụ thể: robot cầm vật đặt vào rổ ở giữa bàn, sau �
 - C=A ban đầu làm bước rút tay cuối cùng fail (không có raise waypoint an toàn, quá gần cột trụ robot) dù vật đã đặt xong thành công — đổi C ra xa cột trụ hơn thì PASS toàn bộ.
 - Test hồi quy: `tests/test_retrieve.py`. Full suite (`unittest discover -s tests`) sau khi thêm: không regression, chỉ còn fail cũ không liên quan (`test_twenty_trials_acceptance`, 18/20 ngẫu nhiên).
 
+### Đính chính: đặt trực tiếp vào rổ đúng giữa bàn (y=0.0) — không cần sửa code, đã khả thi từ trước (22/09/2026)
+
+Sau khi thử "chiến lược nắm khác" và "sửa URDF/vị trí lắp bệ đỡ" đều thất bại (xem log điều tra trong `context_project.md`), phát hiện lại một episode đã ghi từ trước (`artifacts/episodes/centre-to-right`, 2026-09-18): vật được **nắm trực tiếp tại (0.22, 0.0) — đúng đường tâm bàn** — bằng planner hiện có (`grasp_yaw=90°`, PASS, sai số 4.7mm). Điều này cho thấy khẳng định "nắm mới cần y≥0.30" ở mục Handoff bên trên **chỉ đúng cho layout cụ thể đã test (điểm nhặt rất sâu, x=0.30), không phải quy luật chung**.
+
+Tái lập theo chiều ngược (nhặt vật bình thường, **giao vào rổ đặt đúng giữa bàn**): `Demo((0.10, -0.35), (0.22, 0.0), side="right")` → **PASS**, sai số đặt 14.5mm, tilt 0°, lực ngón tốt (thumb 17.9N, index 8.9N, middle 5.0N, ring 8.1N), grasp_yaw=+30°, place_yaw=+60°. Không cần sửa một dòng code nào.
+
+Nguyên nhân của các lần thất bại trước:
+- `PICK_POSITION_A=(0.08,-0.38)` → rổ giữa bàn: FAIL — điểm nhặt quá sâu (y=-0.38), đường **transfer** (mang vật, không phải nắm hay đặt) phải băng gần hết bề rộng bàn, mọi waypoint trung gian trên đường đó đều ngoài tầm với ở độ cao mang vật.
+- x=0.30 (30cm): FAIL thật — vượt tầm với ở độ cao nắm/đặt, đã kiểm chứng bằng nhiều phương pháp độc lập, không sửa được bằng URDF.
+- x≈0.20-0.22 với điểm nhặt **vừa phải** (không phải điểm sâu nhất): **PASS** — đường transfer đủ ngắn.
+
+Bài học: "gần đường tâm" và "xa 30cm" là hai giới hạn khác nhau, và cả hai đều bị nhầm thành "không nắm được gần tâm" nói chung vì các layout test trước đó luôn kết hợp CẢ hai khó khăn cùng lúc (điểm nhặt cực đoan + khoảng cách xa). Layout dùng một mình từng yếu tố cho thấy y=0.0 tự nó không phải rào cản. Test hồi quy: `tests/test_bimanual_routing.py::test_delivers_object_to_true_centreline_basket`. Lệnh tái tạo: `python -m simulation.pick_place_demo --object 0.10 -0.35 --basket 0.22 0.0`.
+
 ### Phần cứng thật
 
 - Chưa xác nhận giới hạn lực servo OpenArm thật.
