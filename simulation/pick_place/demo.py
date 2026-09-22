@@ -38,12 +38,17 @@ class Demo:
         perception_camera: str = "d435_head",
         verbose: bool = False,
         side: str = "right",
+        scene: Scene | None = None,
     ) -> None:
         if side not in ("left", "right"):
             raise ValueError("side must be 'left' or 'right'")
         self.side = side
         self.route_reason = "direct arm configured"
-        self.scene = Scene(pick_position, basket_position)
+        # `scene` lets a caller continue an episode already in progress on the same
+        # MjModel/MjData (simulation/pick_place/retrieve.py: grasping an object back
+        # out of the basket a previous episode really left it in, walls and all,
+        # instead of rebuilding a fresh table with no basket at that spot).
+        self.scene = scene if scene is not None else Scene(pick_position, basket_position)
         self.planner = GraspPlanner(self.scene, side)
         self.executor = Executor(self.scene)
         self.log = EpisodeLog(lambda: self.scene.data.time, verbose=verbose)

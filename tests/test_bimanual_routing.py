@@ -72,7 +72,7 @@ class BimanualRoutingTests(unittest.TestCase):
         planner = GraspPlanner(Scene())
         attempts = []
 
-        def place(plan, _):
+        def place(plan, _, **kwargs):
             attempts.append(plan.grasp_yaw_deg)
             if len(attempts) == 1:
                 raise RuntimeError("set-down unreachable")

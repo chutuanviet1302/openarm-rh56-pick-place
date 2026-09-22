@@ -83,7 +83,8 @@ class GraspPlanner:
 
     # ------------------------------------------------------------------ targets
     def centers(
-        self, object_position: np.ndarray, place_yaw_deg: float = 0.0, held_offset: np.ndarray | None = None
+        self, object_position: np.ndarray, place_yaw_deg: float = 0.0, held_offset: np.ndarray | None = None,
+        place_floor: np.ndarray | None = None,
     ) -> dict[str, np.ndarray]:
         """Wrist targets per phase, derived from the object, the basket and the jaw.
 
@@ -91,7 +92,12 @@ class GraspPlanner:
         grasp itself always uses the straight-wrist orientation. `held_offset` is the
         object's *measured* position relative to the wrist (world axes, at the grasp
         orientation) once it is in hand; when given, the set-down is planned from where
-        the object really sits instead of from the nominal jaw centre.
+        the object really sits instead of from the nominal jaw centre. `place_floor`
+        overrides the set-down surface: the scene's one basket floor by default, or a
+        bare table point when retrieving an object back out of that basket
+        (simulation/pick_place/retrieve.py) -- the object still has to clear the same
+        basket's rim on the way out, so only the floor used for the final descent
+        changes, not the lift height.
         """
         scene = self.scene
         bottle = np.asarray(object_position, dtype=float)
@@ -135,7 +141,7 @@ class GraspPlanner:
         lift = grasp + np.array([0.0, 0.0, lift_height])
 
         drop = (
-            scene.basket_floor()
+            (scene.basket_floor() if place_floor is None else np.asarray(place_floor, dtype=float))
             + np.array([0.0, 0.0, 0.5 * height + C.PLACE_DROP_HEIGHT])
             + C.PLACE_POSITION_CORRECTION[self.side]
         )
@@ -173,13 +179,18 @@ class GraspPlanner:
             path.append(seed)
         return path
 
-    def plan(self, object_position: np.ndarray, exclude_yaws_deg: tuple[float, ...] = ()) -> Plan:
+    def plan(
+        self, object_position: np.ndarray, exclude_yaws_deg: tuple[float, ...] = (),
+        place_floor: np.ndarray | None = None,
+    ) -> Plan:
         """Solve the whole waypoint chain. Raises RuntimeError with the phase that failed.
 
         Tries each grasp heading in C.GRASP_YAW_CANDIDATES_DEG (0 first, the reference
         posture) and keeps the first whose grasp, standoff, hover and lift all solve.
         `exclude_yaws_deg` skips headings already tried and found wanting in physics
         (the executor's contact / proof-lift checks), so a retry picks another.
+        `place_floor` is forwarded to `centers()`: the scene's one basket by default,
+        or a bare table point when retrieving an object back out of it.
         """
         failures = [f"grasp yaw {yaw:+.0f}: failed in physics, not retried" for yaw in exclude_yaws_deg]
         for yaw in C.GRASP_YAW_CANDIDATES_DEG:
@@ -193,7 +204,7 @@ class GraspPlanner:
                 continue
             plan.grasp_yaw_deg = yaw
             try:
-                self.plan_place(plan, object_position)
+                self.plan_place(plan, object_position, place_floor=place_floor)
             except RuntimeError as error:
                 failures.append(f"grasp yaw {yaw:+.0f}: {error}")
                 continue
@@ -276,17 +287,24 @@ class GraspPlanner:
         joints["raise"], centers["raise"] = self.find_raise(joints["hover"], centers["hover"])
         joints["ready"] = joints["hover"]
         joints["lift"] = solve_pose_ik(self.model, self.side, centers["lift"], self.orientation, joints["grasp"])
+        # Also checked against the basket: a pick that starts *inside* the basket
+        # (retrieval, simulation/pick_place/retrieve.py) must clear its walls on the
+        # way in. For every other pick the basket sits far away and this is a no-op.
+        obstacles = self.scene.table_geoms | self.scene.basket_geoms
         for phase in ("pregrasp", "grasp"):
-            hits = self.hand_contacts(joints[phase], self.scene.table_geoms)
+            hits = self.hand_contacts(joints[phase], obstacles)
             if hits:
-                raise RuntimeError(f"{phase} hand would hit the floor ({', '.join(sorted(hits))})")
+                raise RuntimeError(f"{phase} hand would hit an obstacle ({', '.join(sorted(hits))})")
         clearance = self.fingertip_floor_clearance(joints["grasp"])
         if clearance < C.MIN_FLOOR_CLEARANCE:
             raise RuntimeError(f"grasp fingertip floor clearance only {clearance*1000:.1f}mm")
 
         return Plan(joints, {}, centers, side=self.side)
 
-    def plan_place(self, plan: Plan, object_position: np.ndarray, held_offset: np.ndarray | None = None) -> Plan:
+    def plan_place(
+        self, plan: Plan, object_position: np.ndarray, held_offset: np.ndarray | None = None,
+        place_floor: np.ndarray | None = None,
+    ) -> Plan:
         """Solve transfer + set-down (in place, on `plan`) from the lift pose.
 
         The place side may turn the hand about the vertical: the can stays upright
@@ -294,7 +312,7 @@ class GraspPlanner:
         cannot reach. Every intermediate solution is kept as a carry waypoint.
         Called once at planning time with the nominal jaw, and again after the grasp
         with the measured `held_offset` so the object -- not the wrist -- lands on the
-        basket centre.
+        basket centre. `place_floor` overrides the set-down surface (see `centers()`).
         """
         joints = plan.joints
         failures = []
@@ -305,7 +323,8 @@ class GraspPlanner:
         feasible = []
         for yaw in C.PLACE_YAW_CANDIDATES_DEG:
             centers_yaw = {**plan.centers, **{
-                k: v for k, v in self.centers(object_position, yaw, held_offset).items() if k in ("transfer", "lower")
+                k: v for k, v in self.centers(object_position, yaw, held_offset, place_floor).items()
+                if k in ("transfer", "lower")
             }}
             for strategy, route in self.transfer_route_candidates(lift_center, centers_yaw["transfer"]):
                 try:
