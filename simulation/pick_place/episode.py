@@ -47,6 +47,7 @@ class TrialResult:
     # Object position and wrist position observed at the end of each phase
     phase_observations: dict[str, dict[str, list[float]]] | None = None
     route: str = "DIRECT_RIGHT"
+    route_reason: str | None = None
     source_arm: str = "right"
     target_arm: str = "right"
     handoff_pose: list[float] | None = None

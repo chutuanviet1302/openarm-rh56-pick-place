@@ -22,6 +22,7 @@ from simulation.pick_place.demo import PHASES, Demo, run_trial, sample_layout
 from simulation.pick_place.episode import write_report
 from simulation.pick_place.routing import Route, TaskRouter
 from simulation.pick_place.scene import Scene
+from simulation.vision_detector import VisionDetector
 
 CAMERAS = ("isometric", "overhead", "d435_head", "right_wrist_camera", "front_view", "side_view", "close_grasp", "free")
 
@@ -81,17 +82,30 @@ def main(argv: list[str] | None = None) -> None:
     layout = dict(pick_position=tuple(args.object), basket_position=tuple(args.basket),
                   perception=args.perception, verbose=args.verbose)
 
-    def select_side(trial_layout: dict) -> str:
+    def select_side(trial_layout: dict) -> tuple[str, str]:
         if args.arm != "auto":
-            return args.arm
-        decision = TaskRouter(Scene(trial_layout["pick_position"], trial_layout["basket_position"])).select()
+            return args.arm, "arm selected explicitly"
+        scene = Scene(trial_layout["pick_position"], trial_layout["basket_position"])
+        observed = None
+        if args.perception:
+            detection = VisionDetector(scene.model, "d435_head").detect_object(scene.data, render_annotation=False)
+            if not detection.found:
+                raise RuntimeError("route selection failed: object not found by d435_head")
+            observed = detection.pos_world
+        decision = TaskRouter(scene).select(observed)
         if decision.route not in (Route.DIRECT_RIGHT, Route.DIRECT_LEFT):
             raise RuntimeError(f"{decision.route.value}: {decision.reason}")
         print(f"route: {decision.route.value} — {decision.reason}")
-        return decision.source_arm
+        return decision.source_arm, decision.reason
+
+    def build_demo(trial_layout: dict) -> Demo:
+        side, reason = select_side(trial_layout)
+        demo = Demo(**trial_layout, side=side)
+        demo.route_reason = reason
+        return demo
 
     if args.plan_only:
-        demo = Demo(**layout, side=select_side(layout))
+        demo = build_demo(layout)
         demo.phase_perceive()
         plan = demo.planner.plan(demo.object_position())
         print(demo.planner.describe(plan))
@@ -105,7 +119,7 @@ def main(argv: list[str] | None = None) -> None:
             if args.randomize:
                 sample_side = args.arm if args.arm != "auto" else ("right" if index % 2 else "left")
                 trial_layout.update(sample_layout(rng, side=sample_side, perception=args.perception))
-            demo = Demo(**trial_layout, side=select_side(trial_layout))
+            demo = build_demo(trial_layout)
             if args.trace:
                 install_trace(demo, args.trace)
             result = run_trial(demo, stop_after=args.stop_after)
@@ -118,7 +132,7 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         return
 
-    demo = Demo(**layout, side=select_side(layout))
+    demo = build_demo(layout)
     if args.trace:
         install_trace(demo, args.trace)
     # Pressing R in the window restarts the episode: the scene is reset to its start

@@ -42,6 +42,7 @@ class Demo:
         if side not in ("left", "right"):
             raise ValueError("side must be 'left' or 'right'")
         self.side = side
+        self.route_reason = "direct arm configured"
         self.scene = Scene(pick_position, basket_position)
         self.planner = GraspPlanner(self.scene, side)
         self.executor = Executor(self.scene)
@@ -508,6 +509,7 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
         phase_joint_targets=values.get("phase_joint_targets"),
         phase_observations=demo.log.observations,
         route=f"DIRECT_{demo.side.upper()}",
+        route_reason=demo.route_reason,
         source_arm=demo.side,
         target_arm=demo.side,
         min_joint_margin_deg=values.get("min_joint_margin_deg"),

@@ -1,0 +1,895 @@
+{
+  "pool_size": 81,
+  "edge_margin_cut_deg": 0.31,
+  "created_at": "2026-09-21T17:02:30",
+  "side": "right",
+  "seed": 20260921,
+  "count": 50,
+  "requested": 50,
+  "quota": {
+    "centre": 17,
+    "edge": 17,
+    "detour": 16
+  },
+  "achieved": {
+    "centre": 17,
+    "edge": 17,
+    "detour": 16
+  },
+  "shortfall": {},
+  "screen": {
+    "held_offset_envelope_m": 0.01,
+    "pick_box": [
+      [
+        0.02,
+        0.27
+      ],
+      [
+        0.2,
+        0.43
+      ]
+    ],
+    "basket_box": [
+      [
+        0.19,
+        0.29
+      ],
+      [
+        0.01,
+        0.21
+      ]
+    ]
+  },
+  "layouts": [
+    {
+      "pick_position": [
+        0.17792,
+        -0.39843
+      ],
+      "basket_position": [
+        0.2127,
+        -0.18412
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 8.79,
+      "pick_to_basket_m": 0.2171,
+      "region": "centre",
+      "index": 0
+    },
+    {
+      "pick_position": [
+        0.03247,
+        -0.39649
+      ],
+      "basket_position": [
+        0.25521,
+        -0.18869
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 14.6,
+      "pick_to_basket_m": 0.3046,
+      "region": "centre",
+      "index": 1
+    },
+    {
+      "pick_position": [
+        0.16158,
+        -0.39878
+      ],
+      "basket_position": [
+        0.20409,
+        -0.196
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 9.56,
+      "pick_to_basket_m": 0.2072,
+      "region": "centre",
+      "index": 2
+    },
+    {
+      "pick_position": [
+        0.19089,
+        -0.35468
+      ],
+      "basket_position": [
+        0.25682,
+        -0.17254
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 2.28,
+      "pick_to_basket_m": 0.1937,
+      "region": "centre",
+      "index": 3
+    },
+    {
+      "pick_position": [
+        0.05413,
+        -0.35461
+      ],
+      "basket_position": [
+        0.22568,
+        -0.18502
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 11.12,
+      "pick_to_basket_m": 0.2412,
+      "region": "centre",
+      "index": 4
+    },
+    {
+      "pick_position": [
+        0.09711,
+        -0.40303
+      ],
+      "basket_position": [
+        0.26113,
+        -0.1415
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 12.28,
+      "pick_to_basket_m": 0.3087,
+      "region": "centre",
+      "index": 5
+    },
+    {
+      "pick_position": [
+        0.08732,
+        -0.41246
+      ],
+      "basket_position": [
+        0.28354,
+        -0.12041
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 13.1,
+      "pick_to_basket_m": 0.3518,
+      "region": "centre",
+      "index": 6
+    },
+    {
+      "pick_position": [
+        0.15912,
+        -0.37016
+      ],
+      "basket_position": [
+        0.27372,
+        -0.13988
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 8.79,
+      "pick_to_basket_m": 0.2572,
+      "region": "centre",
+      "index": 7
+    },
+    {
+      "pick_position": [
+        0.07328,
+        -0.40747
+      ],
+      "basket_position": [
+        0.27672,
+        -0.13287
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 13.31,
+      "pick_to_basket_m": 0.3417,
+      "region": "centre",
+      "index": 8
+    },
+    {
+      "pick_position": [
+        0.15509,
+        -0.36846
+      ],
+      "basket_position": [
+        0.2392,
+        -0.16387
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 8.87,
+      "pick_to_basket_m": 0.2212,
+      "region": "centre",
+      "index": 9
+    },
+    {
+      "pick_position": [
+        0.15887,
+        -0.35407
+      ],
+      "basket_position": [
+        0.27224,
+        -0.15475
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 2.23,
+      "pick_to_basket_m": 0.2293,
+      "region": "centre",
+      "index": 10
+    },
+    {
+      "pick_position": [
+        0.1489,
+        -0.39493
+      ],
+      "basket_position": [
+        0.2805,
+        -0.13249
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 9.93,
+      "pick_to_basket_m": 0.2936,
+      "region": "centre",
+      "index": 11
+    },
+    {
+      "pick_position": [
+        0.09538,
+        -0.39261
+      ],
+      "basket_position": [
+        0.25853,
+        -0.18856
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 11.6,
+      "pick_to_basket_m": 0.2613,
+      "region": "centre",
+      "index": 12
+    },
+    {
+      "pick_position": [
+        0.26069,
+        -0.22583
+      ],
+      "basket_position": [
+        0.25019,
+        -0.06514
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 0.0,
+      "grasp_joint_margin_deg": 0.32,
+      "pick_to_basket_m": 0.161,
+      "region": "centre",
+      "index": 13
+    },
+    {
+      "pick_position": [
+        0.17711,
+        -0.36003
+      ],
+      "basket_position": [
+        0.211,
+        -0.1724
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 3.69,
+      "pick_to_basket_m": 0.1907,
+      "region": "centre",
+      "index": 14
+    },
+    {
+      "pick_position": [
+        0.054,
+        -0.36926
+      ],
+      "basket_position": [
+        0.23402,
+        -0.1922
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 11.91,
+      "pick_to_basket_m": 0.2525,
+      "region": "centre",
+      "index": 15
+    },
+    {
+      "pick_position": [
+        0.18327,
+        -0.33999
+      ],
+      "basket_position": [
+        0.2255,
+        -0.16627
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.44,
+      "pick_to_basket_m": 0.1788,
+      "region": "centre",
+      "index": 16
+    },
+    {
+      "pick_position": [
+        0.11024,
+        -0.29146
+      ],
+      "basket_position": [
+        0.24123,
+        -0.17028
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1784,
+      "region": "edge",
+      "index": 17
+    },
+    {
+      "pick_position": [
+        0.13622,
+        -0.27598
+      ],
+      "basket_position": [
+        0.26248,
+        -0.18506
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1556,
+      "region": "edge",
+      "index": 18
+    },
+    {
+      "pick_position": [
+        0.14441,
+        -0.32178
+      ],
+      "basket_position": [
+        0.23398,
+        -0.19083
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1587,
+      "region": "edge",
+      "index": 19
+    },
+    {
+      "pick_position": [
+        0.15306,
+        -0.30121
+      ],
+      "basket_position": [
+        0.27976,
+        -0.13197
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.2114,
+      "region": "edge",
+      "index": 20
+    },
+    {
+      "pick_position": [
+        0.1095,
+        -0.22976
+      ],
+      "basket_position": [
+        0.25616,
+        -0.11667
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 0.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1852,
+      "region": "edge",
+      "index": 21
+    },
+    {
+      "pick_position": [
+        0.122,
+        -0.29539
+      ],
+      "basket_position": [
+        0.23387,
+        -0.18876
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1545,
+      "region": "edge",
+      "index": 22
+    },
+    {
+      "pick_position": [
+        0.19425,
+        -0.21989
+      ],
+      "basket_position": [
+        0.27376,
+        -0.08194
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 0.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1592,
+      "region": "edge",
+      "index": 23
+    },
+    {
+      "pick_position": [
+        0.10148,
+        -0.23564
+      ],
+      "basket_position": [
+        0.28579,
+        -0.11758
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 0.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.2189,
+      "region": "edge",
+      "index": 24
+    },
+    {
+      "pick_position": [
+        0.13029,
+        -0.23987
+      ],
+      "basket_position": [
+        0.23317,
+        -0.12198
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 0.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1565,
+      "region": "edge",
+      "index": 25
+    },
+    {
+      "pick_position": [
+        0.23724,
+        -0.32302
+      ],
+      "basket_position": [
+        0.2715,
+        -0.12719
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.28,
+      "pick_to_basket_m": 0.1988,
+      "region": "edge",
+      "index": 26
+    },
+    {
+      "pick_position": [
+        0.24952,
+        -0.30413
+      ],
+      "basket_position": [
+        0.27096,
+        -0.10822
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.06,
+      "pick_to_basket_m": 0.1971,
+      "region": "edge",
+      "index": 27
+    },
+    {
+      "pick_position": [
+        0.15128,
+        -0.30762
+      ],
+      "basket_position": [
+        0.26947,
+        -0.20133
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 0.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.159,
+      "region": "edge",
+      "index": 28
+    },
+    {
+      "pick_position": [
+        0.19468,
+        -0.22534
+      ],
+      "basket_position": [
+        0.27335,
+        -0.06866
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 0.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1753,
+      "region": "edge",
+      "index": 29
+    },
+    {
+      "pick_position": [
+        0.14442,
+        -0.32706
+      ],
+      "basket_position": [
+        0.26066,
+        -0.17108
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1945,
+      "region": "edge",
+      "index": 30
+    },
+    {
+      "pick_position": [
+        0.22229,
+        -0.22573
+      ],
+      "basket_position": [
+        0.23848,
+        -0.07399
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1526,
+      "region": "edge",
+      "index": 31
+    },
+    {
+      "pick_position": [
+        0.22455,
+        -0.21584
+      ],
+      "basket_position": [
+        0.26436,
+        -0.05569
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 0.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.165,
+      "region": "edge",
+      "index": 32
+    },
+    {
+      "pick_position": [
+        0.2473,
+        -0.20217
+      ],
+      "basket_position": [
+        0.21557,
+        -0.01344
+      ],
+      "route_strategy": "direct",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1914,
+      "region": "edge",
+      "index": 33
+    },
+    {
+      "pick_position": [
+        0.07764,
+        -0.41067
+      ],
+      "basket_position": [
+        0.22699,
+        -0.04656
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 90.0,
+      "grasp_joint_margin_deg": 13.49,
+      "pick_to_basket_m": 0.3936,
+      "region": "detour",
+      "index": 34
+    },
+    {
+      "pick_position": [
+        0.12025,
+        -0.37642
+      ],
+      "basket_position": [
+        0.23138,
+        -0.0196
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 90.0,
+      "grasp_joint_margin_deg": 10.19,
+      "pick_to_basket_m": 0.3737,
+      "region": "detour",
+      "index": 35
+    },
+    {
+      "pick_position": [
+        0.05779,
+        -0.40071
+      ],
+      "basket_position": [
+        0.20846,
+        -0.08842
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 90.0,
+      "grasp_joint_margin_deg": 13.71,
+      "pick_to_basket_m": 0.3467,
+      "region": "detour",
+      "index": 36
+    },
+    {
+      "pick_position": [
+        0.17591,
+        -0.35614
+      ],
+      "basket_position": [
+        0.23859,
+        -0.0952
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 2.34,
+      "pick_to_basket_m": 0.2684,
+      "region": "detour",
+      "index": 37
+    },
+    {
+      "pick_position": [
+        0.18368,
+        -0.32374
+      ],
+      "basket_position": [
+        0.24382,
+        -0.04526
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.2849,
+      "region": "detour",
+      "index": 38
+    },
+    {
+      "pick_position": [
+        0.04268,
+        -0.40228
+      ],
+      "basket_position": [
+        0.22022,
+        -0.02357
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 90.0,
+      "grasp_joint_margin_deg": 14.51,
+      "pick_to_basket_m": 0.4183,
+      "region": "detour",
+      "index": 39
+    },
+    {
+      "pick_position": [
+        0.19856,
+        -0.33039
+      ],
+      "basket_position": [
+        0.24032,
+        -0.05642
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.47,
+      "pick_to_basket_m": 0.2771,
+      "region": "detour",
+      "index": 40
+    },
+    {
+      "pick_position": [
+        0.10388,
+        -0.40712
+      ],
+      "basket_position": [
+        0.23828,
+        -0.09175
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 12.3,
+      "pick_to_basket_m": 0.3428,
+      "region": "detour",
+      "index": 41
+    },
+    {
+      "pick_position": [
+        0.26631,
+        -0.31086
+      ],
+      "basket_position": [
+        0.23701,
+        -0.03017
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 0.9,
+      "pick_to_basket_m": 0.2822,
+      "region": "detour",
+      "index": 42
+    },
+    {
+      "pick_position": [
+        0.03237,
+        -0.41042
+      ],
+      "basket_position": [
+        0.22672,
+        -0.05045
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 90.0,
+      "grasp_joint_margin_deg": 16.65,
+      "pick_to_basket_m": 0.4091,
+      "region": "detour",
+      "index": 43
+    },
+    {
+      "pick_position": [
+        0.09568,
+        -0.40926
+      ],
+      "basket_position": [
+        0.25007,
+        -0.06911
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 12.7,
+      "pick_to_basket_m": 0.3735,
+      "region": "detour",
+      "index": 44
+    },
+    {
+      "pick_position": [
+        0.1761,
+        -0.20079
+      ],
+      "basket_position": [
+        0.21237,
+        -0.02136
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 60.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.1831,
+      "region": "detour",
+      "index": 45
+    },
+    {
+      "pick_position": [
+        0.17285,
+        -0.41547
+      ],
+      "basket_position": [
+        0.20527,
+        -0.05413
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 90.0,
+      "grasp_joint_margin_deg": 9.7,
+      "pick_to_basket_m": 0.3628,
+      "region": "detour",
+      "index": 46
+    },
+    {
+      "pick_position": [
+        0.07751,
+        -0.41434
+      ],
+      "basket_position": [
+        0.22304,
+        -0.04944
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 0.0,
+      "place_yaw_deg": 90.0,
+      "grasp_joint_margin_deg": 13.84,
+      "pick_to_basket_m": 0.3928,
+      "region": "detour",
+      "index": 47
+    },
+    {
+      "pick_position": [
+        0.17044,
+        -0.31265
+      ],
+      "basket_position": [
+        0.23567,
+        -0.01758
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 60.0,
+      "grasp_joint_margin_deg": 0.0,
+      "pick_to_basket_m": 0.3022,
+      "region": "detour",
+      "index": 48
+    },
+    {
+      "pick_position": [
+        0.25677,
+        -0.3108
+      ],
+      "basket_position": [
+        0.23346,
+        -0.06713
+      ],
+      "route_strategy": "detour_right",
+      "grasp_yaw_deg": 30.0,
+      "place_yaw_deg": 30.0,
+      "grasp_joint_margin_deg": 0.28,
+      "pick_to_basket_m": 0.2448,
+      "region": "detour",
+      "index": 49
+    }
+  ]
+}

@@ -12,5 +12,11 @@ artifacts/*.png
 scratch_*
 ycb_renders/
 
+# Local investigation output and machine-specific editor settings
+_*.log
+.agents/
+.vscode/
+artifacts/benchmarks/*.json
+
 # Recorded episode viewer output (regenerate with scripts/record_episode.py)
 artifacts/episodes/

@@ -192,7 +192,11 @@ class GraspPlanner:
                 failures.append(f"grasp yaw {yaw:+.0f}: {error}")
                 continue
             plan.grasp_yaw_deg = yaw
-            self.plan_place(plan, object_position)
+            try:
+                self.plan_place(plan, object_position)
+            except RuntimeError as error:
+                failures.append(f"grasp yaw {yaw:+.0f}: {error}")
+                continue
             return plan
         self.orientation = self.base_orientation
         raise RuntimeError("no reachable grasp at any hand yaw:\n  " + "\n  ".join(failures))
@@ -217,11 +221,22 @@ class GraspPlanner:
         hover are the only unplanned motions; they are checked against the basket,
         the object (where it is *now*: at A before the pick, at B for the return) and
         the table with PATH_CLEARANCE of room, and the first clear height/offset wins.
+
+        Because the first candidate over the floor wins, this pins the plan's *minimum*
+        joint margin just above MIN_JOINT_MARGIN_DEG: mapped across the reachable table,
+        every layout that planned at all reported the same 3.3 degrees. So that number
+        describes where the accept test sits, not how hard the layout is -- judge a
+        layout by the margin at its grasp pose instead, which is the constrained one.
+        Taking the roomiest candidate here rather than the first was tried and is worse:
+        it moves the raise away from the hover, the attention -> raise -> hover blend
+        sweeps differently, and two trials lost the grasp outright (17/20 -> 16/20, and
+        the mirrored left-arm case failed too).
+
         Returns (joints, centre); raises RuntimeError when nothing is clear."""
         hanging = self.scene.wrist_position_at(self.side, self.scene.attention_pose[self.side])
         attention = self.scene.attention_pose[self.side]
         obstacles = self.scene.basket_geoms | {self.scene.object_geom} | self.scene.table_geoms
-        failures, feasible = [], []
+        failures = []
         for extra in np.linspace(C.RAISE_ABOVE_HOVER, 0.0, 5):
             for dx, raw_dy in C.RAISE_XY_OFFSETS:
                 dy = raw_dy if self.side == "right" else -raw_dy
@@ -249,6 +264,9 @@ class GraspPlanner:
         # The grasp is the most constrained pose: solve it first from the reference
         # posture, then walk backwards off it to the standoff and up to the hover.
         joints["grasp"] = solve_pose_ik(self.model, self.side, centers["grasp"], self.orientation, C.ARM_SEED[self.side])
+        grasp_margin = self.joint_margin_degrees(joints["grasp"])
+        if grasp_margin < C.MIN_JOINT_MARGIN_DEG:
+            raise RuntimeError(f"grasp joint margin only {grasp_margin:.1f}deg")
         joints["pregrasp"] = self._walk(centers["grasp"], centers["pregrasp"], joints["grasp"], 6)[-1]
         joints["hover"] = self._walk(centers["pregrasp"], centers["hover"], joints["pregrasp"], 6)[-1]
         # Way point between the attention stance and the hover: the same hand pose

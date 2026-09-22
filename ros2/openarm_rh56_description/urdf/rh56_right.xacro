@@ -1,0 +1,198 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Materials for high-fidelity visual contrast and clear finger distinction -->
+  <material name="rh56_palm_black">
+    <color rgba="0.14 0.14 0.16 1.0"/>
+  </material>
+  <material name="rh56_aluminum">
+    <color rgba="0.78 0.78 0.80 1.0"/>
+  </material>
+  <material name="rh56_knuckle_silver">
+    <color rgba="0.72 0.73 0.76 1.0"/>
+  </material>
+  <material name="rh56_finger_gray">
+    <color rgba="0.32 0.33 0.36 1.0"/>
+  </material>
+  <material name="rh56_finger_pad">
+    <color rgba="0.18 0.18 0.21 1.0"/>
+  </material>
+
+  <xacro:macro name="rh56_mesh_link" params="name mesh material:='rh56_palm_black' xyz:='0 0 0' rpy:='0 0 0'">
+    <link name="${name}">
+      <visual>
+        <origin xyz="${xyz}" rpy="${rpy}"/>
+        <geometry><mesh filename="package://openarm_rh56_description/meshes/${mesh}"/></geometry>
+        <material name="${material}"/>
+      </visual>
+      <inertial>
+        <mass value="0.02"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="rh56_joint" params="name parent child xyz rpy axis lower upper mimic:='' multiplier:=1.0 offset:=0.0 joint_type:='fixed'">
+    <xacro:if value="${joint_type == 'fixed'}">
+      <joint name="${name}" type="fixed">
+        <parent link="${parent}"/><child link="${child}"/>
+        <origin xyz="${xyz}" rpy="${rpy}"/>
+      </joint>
+    </xacro:if>
+    <xacro:unless value="${joint_type == 'fixed'}">
+      <joint name="${name}" type="${joint_type}">
+        <parent link="${parent}"/><child link="${child}"/>
+        <origin xyz="${xyz}" rpy="${rpy}"/><axis xyz="${axis}"/>
+        <limit lower="${lower}" upper="${upper}" effort="1.0" velocity="10.0"/>
+        <dynamics damping="0.1" friction="0.001"/>
+        <xacro:if value="${mimic != ''}"><mimic joint="${mimic}" multiplier="${multiplier}" offset="${offset}"/></xacro:if>
+      </joint>
+    </xacro:unless>
+  </xacro:macro>
+
+  <!-- ======================== RIGHT HAND ======================== -->
+  <xacro:macro name="rh56_right" params="parent prefix:='rh56_right_'">
+    <link name="${prefix}base">
+      <!-- Base palm housing mesh -->
+      <visual>
+        <origin xyz="0 0 0" rpy="-1.57079632679 0 3.14159265359"/>
+        <geometry><mesh filename="package://openarm_rh56_description/meshes/R_hand_base_link.STL"/></geometry>
+        <material name="rh56_palm_black"/>
+      </visual>
+      <!-- Aluminum adapter flange plate connecting link7 to hand base -->
+      <visual>
+        <origin xyz="0 0 -0.005" rpy="0 0 0"/>
+        <geometry><cylinder radius="0.028" length="0.010"/></geometry>
+        <material name="rh56_aluminum"/>
+      </visual>
+      <inertial>
+        <mass value="0.55"/>
+        <origin xyz="0 0 0.060" rpy="0 0 0"/>
+        <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.0005"/>
+      </inertial>
+    </link>
+
+    <joint name="${prefix}mount" type="fixed">
+      <parent link="${parent}"/><child link="${prefix}base"/>
+      <origin xyz="0 0 0.1055" rpy="0 0 -1.57079632679"/>
+    </joint>
+
+    <!-- Thumb (4 links: yaw base, proximal, intermediate, distal) -->
+    <xacro:rh56_mesh_link name="${prefix}thumb_proximal_base" mesh="right_thumb_proximal_base_visual.stl" material="rh56_knuckle_silver"/>
+    <xacro:rh56_joint name="${prefix}thumb_yaw" parent="${prefix}base" child="${prefix}thumb_proximal_base" xyz="0.0169601 0.0204504 0.0691" rpy="0.000003673 -0.000006327 -1.570794117" axis="0 0 -1" lower="0" upper="1.308"/>
+
+    <xacro:rh56_mesh_link name="${prefix}thumb_proximal" mesh="right_thumb_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}thumb_pitch" parent="${prefix}thumb_proximal_base" child="${prefix}thumb_proximal" xyz="-0.0088099 0.010892 -0.00925" rpy="1.57079921 0 2.858699945" axis="0 0 1" lower="0.1" upper="0.7"/>
+
+    <xacro:rh56_mesh_link name="${prefix}thumb_intermediate" mesh="right_thumb_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}thumb_intermediate_joint" parent="${prefix}thumb_proximal" child="${prefix}thumb_intermediate" xyz="0.04407 0.034553 -0.0008" rpy="0 0 0" axis="0 0 1" lower="0" upper="0.8" mimic="${prefix}thumb_pitch" multiplier="1.33" offset="0.15"/>
+
+    <xacro:rh56_mesh_link name="${prefix}thumb_distal" mesh="right_thumb_distal_visual.stl" material="rh56_palm_black"/>
+    <xacro:rh56_joint name="${prefix}thumb_distal_joint" parent="${prefix}thumb_intermediate" child="${prefix}thumb_distal" xyz="0.020248 0.010156 -0.0012" rpy="0 0 0" axis="0 0 1" lower="0" upper="0.6" mimic="${prefix}thumb_pitch" multiplier="0.66" offset="0.15"/>
+
+    <!-- Index finger -->
+    <xacro:rh56_mesh_link name="${prefix}index_proximal" mesh="right_index_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}index" parent="${prefix}base" child="${prefix}index_proximal" xyz="-0.000285244 0.0322689 0.13653" rpy="1.605694863 0 3.14159" axis="0 0 1" lower="0.025" upper="1.57"/>
+
+    <xacro:rh56_mesh_link name="${prefix}index_intermediate" mesh="right_index_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}index_intermediate_joint" parent="${prefix}index_proximal" child="${prefix}index_intermediate" xyz="-0.0026138 0.032026 -0.001" rpy="0 0 0" axis="0 0 1" lower="0.025" upper="1.70" mimic="${prefix}index" multiplier="1.1169" offset="-0.05"/>
+
+    <!-- Middle finger -->
+    <xacro:rh56_mesh_link name="${prefix}middle_proximal" mesh="right_index_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}middle" parent="${prefix}base" child="${prefix}middle_proximal" xyz="-0.000285296 0.0129509 0.1371" rpy="1.570794117 0 3.14159" axis="0 0 1" lower="0" upper="1.57"/>
+
+    <xacro:rh56_mesh_link name="${prefix}middle_intermediate" mesh="right_middle_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}middle_intermediate_joint" parent="${prefix}middle_proximal" child="${prefix}middle_intermediate" xyz="-0.0024229 0.032041 -0.001" rpy="0 0 0" axis="0 0 1" lower="-0.04545" upper="1.56" mimic="${prefix}middle" multiplier="1.1169" offset="-0.15"/>
+
+    <!-- Ring finger -->
+    <xacro:rh56_mesh_link name="${prefix}ring_proximal" mesh="right_index_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}ring" parent="${prefix}base" child="${prefix}ring_proximal" xyz="-0.000285347 -0.00628633 0.13691" rpy="1.518410014 0 3.14159" axis="0 0 1" lower="0" upper="1.57"/>
+
+    <xacro:rh56_mesh_link name="${prefix}ring_intermediate" mesh="right_index_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}ring_intermediate_joint" parent="${prefix}ring_proximal" child="${prefix}ring_intermediate" xyz="-0.0024229 0.032041 -0.001" rpy="0 0 0" axis="0 0 1" lower="-0.04545" upper="1.56" mimic="${prefix}ring" multiplier="1.1169" offset="-0.15"/>
+
+    <!-- Pinky finger -->
+    <xacro:rh56_mesh_link name="${prefix}pinky_proximal" mesh="right_index_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}pinky" parent="${prefix}base" child="${prefix}pinky_proximal" xyz="-0.000285398 -0.0254871 0.13571" rpy="1.466109973 0 3.14159" axis="0 0 1" lower="0" upper="1.57"/>
+
+    <xacro:rh56_mesh_link name="${prefix}pinky_intermediate" mesh="right_pinky_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}pinky_intermediate_joint" parent="${prefix}pinky_proximal" child="${prefix}pinky_intermediate" xyz="-0.0024229 0.032041 -0.001" rpy="0 0 0" axis="0 0 1" lower="-0.04545" upper="1.56" mimic="${prefix}pinky" multiplier="1.1169" offset="-0.15"/>
+
+    <link name="${prefix}tcp"/>
+    <joint name="${prefix}tcp_joint" type="fixed"><parent link="${prefix}base"/><child link="${prefix}tcp"/><origin xyz="0.070 0.016 0.155" rpy="0 0 0"/></joint>
+  </xacro:macro>
+
+  <!-- ======================== LEFT HAND ======================== -->
+  <xacro:macro name="rh56_left" params="parent prefix:='rh56_left_'">
+    <link name="${prefix}base">
+      <!-- Base palm housing mesh -->
+      <visual>
+        <origin xyz="0 0 0" rpy="-1.57079632679 0 3.14159265359"/>
+        <geometry><mesh filename="package://openarm_rh56_description/meshes/L_hand_base_link.STL"/></geometry>
+        <material name="rh56_palm_black"/>
+      </visual>
+      <!-- Aluminum adapter flange plate connecting link7 to hand base -->
+      <visual>
+        <origin xyz="0 0 -0.005" rpy="0 0 0"/>
+        <geometry><cylinder radius="0.028" length="0.010"/></geometry>
+        <material name="rh56_aluminum"/>
+      </visual>
+      <inertial>
+        <mass value="0.55"/>
+        <origin xyz="0 0 0.060" rpy="0 0 0"/>
+        <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.0005"/>
+      </inertial>
+    </link>
+
+    <joint name="${prefix}mount" type="fixed">
+      <parent link="${parent}"/><child link="${prefix}base"/>
+      <origin xyz="0 0 0.1055" rpy="0 0 1.57079632679"/>
+    </joint>
+
+    <!-- Thumb (4 links: yaw base, proximal, intermediate, distal) -->
+    <xacro:rh56_mesh_link name="${prefix}thumb_proximal_base" mesh="left_thumb_proximal_base_visual.stl" material="rh56_knuckle_silver"/>
+    <xacro:rh56_joint name="${prefix}thumb_yaw" parent="${prefix}base" child="${prefix}thumb_proximal_base" xyz="0.0169599 -0.02045 0.0691" rpy="0.000003673 0 -1.570794117" axis="0 0 1" lower="0" upper="1.308"/>
+
+    <xacro:rh56_mesh_link name="${prefix}thumb_proximal" mesh="left_thumb_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}thumb_pitch" parent="${prefix}thumb_proximal_base" child="${prefix}thumb_proximal" xyz="0.0099867 0.0098242 -0.0089" rpy="-1.570798675 0 0.169389858" axis="0 0 -1" lower="0" upper="0.6"/>
+
+    <xacro:rh56_mesh_link name="${prefix}thumb_intermediate" mesh="left_thumb_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}thumb_intermediate_joint" parent="${prefix}thumb_proximal" child="${prefix}thumb_intermediate" xyz="0.04407 -0.034553 -0.0008" rpy="0 0 0" axis="0 0 -1" lower="0" upper="0.8" mimic="${prefix}thumb_pitch" multiplier="1.33" offset="0.15"/>
+
+    <xacro:rh56_mesh_link name="${prefix}thumb_distal" mesh="left_thumb_distal_visual.stl" material="rh56_palm_black"/>
+    <xacro:rh56_joint name="${prefix}thumb_distal_joint" parent="${prefix}thumb_intermediate" child="${prefix}thumb_distal" xyz="0.020248 -0.010156 -0.0012" rpy="0 0 0" axis="0 0 -1" lower="0" upper="0.4" mimic="${prefix}thumb_pitch" multiplier="0.66" offset="0.15"/>
+
+    <!-- Index finger -->
+    <xacro:rh56_mesh_link name="${prefix}index_proximal" mesh="left_index_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}index" parent="${prefix}base" child="${prefix}index_proximal" xyz="-0.000285416 -0.032268 0.13653" rpy="-1.605703495 0 3.14159" axis="0 0 -1" lower="0" upper="1.47"/>
+
+    <xacro:rh56_mesh_link name="${prefix}index_intermediate" mesh="left_index_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}index_intermediate_joint" parent="${prefix}index_proximal" child="${prefix}index_intermediate" xyz="-0.0026138 -0.032026 -0.001" rpy="0 0 0" axis="0 0 -1" lower="-0.04545" upper="1.56" mimic="${prefix}index" multiplier="1.1169" offset="-0.05"/>
+
+    <!-- Middle finger -->
+    <xacro:rh56_mesh_link name="${prefix}middle_proximal" mesh="left_index_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}middle" parent="${prefix}base" child="${prefix}middle_proximal" xyz="-0.000285364 -0.01295 0.1371" rpy="-1.570796946 0 3.14159" axis="0 0 -1" lower="0" upper="1.47"/>
+
+    <xacro:rh56_mesh_link name="${prefix}middle_intermediate" mesh="left_middle_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}middle_intermediate_joint" parent="${prefix}middle_proximal" child="${prefix}middle_intermediate" xyz="-0.0024229 -0.032041 -0.001" rpy="0 0 0" axis="0 0 -1" lower="-0.04545" upper="1.56" mimic="${prefix}middle" multiplier="1.1169" offset="-0.15"/>
+
+    <!-- Ring finger -->
+    <xacro:rh56_mesh_link name="${prefix}ring_proximal" mesh="left_index_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}ring" parent="${prefix}base" child="${prefix}ring_proximal" xyz="-0.000285313 0.0062872 0.13691" rpy="-1.518437621 0 3.14159" axis="0 0 -1" lower="0" upper="1.47"/>
+
+    <xacro:rh56_mesh_link name="${prefix}ring_intermediate" mesh="left_index_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}ring_intermediate_joint" parent="${prefix}ring_proximal" child="${prefix}ring_intermediate" xyz="-0.0024229 -0.032041 -0.001" rpy="0 0 0" axis="0 0 -1" lower="-0.04545" upper="1.56" mimic="${prefix}ring" multiplier="1.1169" offset="-0.15"/>
+
+    <!-- Pinky finger -->
+    <xacro:rh56_mesh_link name="${prefix}pinky_proximal" mesh="left_index_proximal_visual.stl" material="rh56_finger_gray"/>
+    <xacro:rh56_joint name="${prefix}pinky" parent="${prefix}base" child="${prefix}pinky_proximal" xyz="-0.000285262 0.025488 0.13571" rpy="-1.466077705 0 3.14159" axis="0 0 -1" lower="0" upper="1.47"/>
+
+    <xacro:rh56_mesh_link name="${prefix}pinky_intermediate" mesh="left_pinky_intermediate_visual.stl" material="rh56_finger_pad"/>
+    <xacro:rh56_joint name="${prefix}pinky_intermediate_joint" parent="${prefix}pinky_proximal" child="${prefix}pinky_intermediate" xyz="-0.0024229 -0.032041 -0.001" rpy="0 0 0" axis="0 0 -1" lower="-0.04545" upper="1.56" mimic="${prefix}pinky" multiplier="1.1169" offset="-0.15"/>
+
+    <link name="${prefix}tcp"/>
+    <joint name="${prefix}tcp_joint" type="fixed"><parent link="${prefix}base"/><child link="${prefix}tcp"/><origin xyz="0.070 -0.016 0.155" rpy="0 0 0"/></joint>
+  </xacro:macro>
+
+</robot>

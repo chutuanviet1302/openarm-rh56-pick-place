@@ -21,7 +21,7 @@ echo   - Chuot giua : Di chuyen (Pan)
 echo   - Phim Space : Tam dung / Tiep tuc (Pause/Resume)
 echo   - Phim R     : Chay lai episode tu dau
 echo.
-.\.venv\Scripts\python.exe -u -m simulation.pick_place_demo %*
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run_mujoco_gtx1650.ps1" %*
 echo.
 echo =======================================================
 echo   Mo phong da hoan thanh. Nhan phim bat ky de thoat...

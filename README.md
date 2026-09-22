@@ -79,8 +79,10 @@ Robot của lab là **OpenArm v1** (mentor xác nhận 18/09). MJCF v1 lấy t�
 .\.venv\Scripts\python.exe -m simulation.run_simulation
 
 # Demo pick-and-place lon YCB bằng tay phải 5 ngón (viewer, chạy thời gian thực)
-.
-un_gui.bat --camera isometric        # isometric | close_grasp | front_view | side_view | overhead | free
+.\run_gui.bat --camera isometric        # isometric | close_grasp | front_view | side_view | overhead | free
+# Tự đặt Python vào Windows High performance GPU policy (GTX 1650)
+# hoặc gọi trực tiếp:
+powershell -ExecutionPolicy Bypass -File .\scripts\run_mujoco_gtx1650.ps1 --camera isometric
 
 # Headless: N trial vật lý, ghi artifacts/physics_trials.json
 .\.venv\Scripts\python.exe -m simulation.pick_place_demo --headless --trials 3 --arm auto
@@ -93,8 +95,7 @@ un_gui.bat --camera isometric        # isometric | close_grasp | front_view | si
 .\.venv\Scripts\python.exe -m simulation.pick_place_demo --headless --trials 3 --perception
 
 # Đổi bố cục: vật A và rổ B (x y trên mặt bàn, mét)
-.
-un_gui.bat --object 0.25 -0.40 --basket 0.42 -0.18
+.\run_gui.bat --object 0.25 -0.40 --basket 0.42 -0.18
 
 # Thu thập demonstration data: mỗi trial một bố cục ngẫu nhiên đã kiểm tra IK/va chạm
 .\.venv\Scripts\python.exe -m simulation.pick_place_demo --headless --trials 8 --randomize --perception --seed 1 --report artifacts/randomized_trials.json
@@ -132,7 +133,17 @@ Mỗi trial ghi đủ: bố cục A/B, vị trí perception + sai số so với 
 
 `simulation/vision_detector.py` là pipeline perception trong sim (cùng cấu trúc với `openarm_pick_place/perception.py` trên robot thật): segment màu → depth → pinhole deprojection → camera→world → fit đường tròn bán kính đã biết; gate là P95 ≤ 5 mm và max < 10 mm trên 20 vị trí. Không đọc pose vật từ sim; không thấy vật thì trial fail vì perception.
 
-Router hiện trả về `DIRECT_RIGHT`, `DIRECT_LEFT`, hai hướng `HANDOFF_*` hoặc `REJECTED` từ IK/collision preflight. Direct hai tay đã chạy vật lý; handoff chỉ được đưa vào executor sau khi tìm được side-grasp pose có khoảng hở giữa hai RH56. Không dùng weld/teleport để giả lập handoff.
+Router hiện trả về `DIRECT_RIGHT`, `DIRECT_LEFT`, hai hướng `HANDOFF_*` hoặc `REJECTED` từ IK/collision preflight. Direct hai tay đã chạy vật lý; `HANDOFF_*` hiện chỉ là đề xuất tuyến, CLI chưa thực thi. Quét pose nắm đồng thời quanh lon ở vùng giao hai tay còn va chạm bàn tay ít nhất 31 mm, nên cần một tư thế nhận vật khác trước khi thực thi handoff. Không dùng weld/teleport để giả lập handoff.
+
+### Benchmark MuJoCo cố định
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.make_benchmark_fixture --arm left --count 50 --seed 20260921
+.\.venv\Scripts\python.exe -m scripts.benchmark_pick_place --arm right --trials 50 --perception --fixture benchmarks/fixtures/right-50-v2.json
+.\.venv\Scripts\python.exe -m scripts.benchmark_pick_place --arm left --trials 50 --perception --fixture benchmarks/fixtures/left-50-v2.json
+```
+
+Fixture được sàng bằng IK và set-down với sai lệch vị trí nắm ±10 mm; fixture mới còn kiểm tra kế hoạch với sai số vị trí camera ±3 mm. Camera D435 giả lập ngắm đường giữa workspace để bao phủ cả tay phải và tay trái. Báo cáo JSON lưu seed, hash fixture, phiên bản MuJoCo, timestep và giới hạn lực actuator. Cổng mỗi tay là 48/50; kết quả dưới ngưỡng phải được báo là chưa đạt, kể cả khi demo mặc định chạy thành công. Phân loại `failure_class=perception` từ oracle replay chỉ có nghĩa *cùng bố cục chạy lại không dùng camera thì đạt*, không chứng minh camera là nguyên nhân gốc: grasp vật lý có thể khác giữa hai lần chạy.
 
 ## Trước khi nối phần cứng
 

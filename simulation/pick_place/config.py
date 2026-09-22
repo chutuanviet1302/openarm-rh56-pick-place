@@ -119,7 +119,7 @@ SET_DOWN_STEP_SECONDS = 0.15
 # candidate whose transfer *and* set-down poses both solve wins.
 # The grasp itself may also turn about the vertical (a round can has no preferred
 # heading); 0 is the reference posture, tried first.
-GRASP_YAW_CANDIDATES_DEG = (0.0, -30.0, 30.0, -60.0, 60.0, -90.0, 90.0)
+GRASP_YAW_CANDIDATES_DEG = (0.0, -30.0, 30.0, 15.0, -15.0, -60.0, 60.0, -90.0, 90.0)
 # How many physically rejected grasps (finger not pressing, proof lift failed) the
 # episode lets go of and retries with another heading before giving up.
 GRASP_RETRIES = 3
@@ -180,7 +180,7 @@ PREGRASP_SETTLE = 0.2
 MOVE_TO_GRASP = 1.0
 PROOF_LIFT_SECONDS = 0.8
 MOVE_TO_LIFT = 1.8
-TRANSFER_SECONDS = 3.0
+TRANSFER_SECONDS = 2.5
 LOWER_SECONDS = 1.2
 ALL_FINGERS = ("index", "middle", "ring", "pinky", "thumb")
 RELAX_GRIP_SECONDS = 0.6  # grip force -> light contact before the fingers open
@@ -194,6 +194,10 @@ VIEWER_FRAME_SECONDS = 1.0 / 30.0
 
 # --------------------------------------------------------------------------- evaluation
 BENCHMARK_TRIALS = 50
+# Screening a benchmark fixture (scripts/make_benchmark_fixture.py). The set-down must
+# still solve with the object this far off the nominal jaw centre in any direction --
+# the grip shifts during the carry and measured held offsets vary by about this much.
+FIXTURE_HELD_OFFSET_ENVELOPE_M = 0.01
 BENCHMARK_REQUIRED_PASSES = 48  # 47/50 is only 94%; >=95% therefore means 48.
 PLACEMENT_ERROR_LIMIT_M = 0.02
 PERCEPTION_MAX_ERROR_M = 0.01

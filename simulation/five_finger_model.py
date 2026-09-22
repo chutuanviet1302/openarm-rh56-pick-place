@@ -236,7 +236,8 @@ def build_five_finger_spec(
     # down the centre line at the middle of the table so the whole work area -- pick
     # point, basket and the space around them -- is in the frame.
     d435_pos = np.array([HEAD_FRONT_X + CAMERA_BODY_HALF_HEIGHT, 0.0, CAMERA_Z])
-    d435_target = np.array([0.30, -0.08, TABLE_TOP_Z])
+    # Aim at the midline so the same D435 frame covers both mirrored workspaces.
+    d435_target = np.array([0.30, 0.0, TABLE_TOP_Z])
     arm.worldbody.add_camera(
         name="d435_head",
         pos=d435_pos.tolist(),
