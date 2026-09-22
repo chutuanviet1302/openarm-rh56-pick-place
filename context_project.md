@@ -258,3 +258,5 @@ ros2 run openarm_pick_place mujoco_bridge --ros-args -p config_path:=$PWD/config
 - Đã chạy vòng benchmark mới có perception: tay phải 9/10 (rtifacts/benchmarks/right-v2-next-10.json), tay trái 3/10 (rtifacts/benchmarks/left-v2-next-10.json). Chưa đủ điều kiện chạy 50 ca.
 - TrialResult bổ sung telemetry release object/wrist trước mở, sau mở và sau retreat để phân tích hướng drift.
 - Full handoff collision-free chưa triển khai; pose sweep hiện chưa đạt điều kiện an toàn.
+
+- 23/09/2026: centring trái thử pose nâng 30 mm, hạ lại nếu IK cho phép; smoke 1/2, release vẫn còn lỗi khi hạ pose không khả thi.

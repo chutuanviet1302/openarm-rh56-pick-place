@@ -83,6 +83,11 @@ Các lỗi tay phải còn lại tập trung ở:
 
 Các lỗi tay trái hiện tập trung ở release/set-down. Sửa camera đã đưa perception error về khoảng 0.2–1.0 mm nhưng chưa sửa được dịch chuyển vật khi nhả. Vòng mới 3/10 cho thấy một số ca bỏ qua centring do IK trái thất bại; các ca lỗi có placement 22.6–45.0 mm. Trial mới ghi thêm vector object/wrist trước mở ngón, sau mở ngón và sau retreat (`release_*`) để phân biệt drift do mở ngón với drift do rút tay.
 
+### Cập nhật sau sửa centring tay trái
+
+- `_centre_over_basket` thử giải IK lateral từ pose nâng 30 mm để tránh biên IK/thành rổ; sau đó hạ về cao độ ban đầu nếu có thể. Nếu pose hạ không khả thi, hệ thống hoàn nguyên pose trước centring để vẫn giữ contact physics và ghi rõ lỗi.
+- Smoke mới tay trái: 1/2; ca còn lại vẫn release lệch khoảng 38.2 mm khi pose hạ không khả thi (`artifacts/benchmarks/left-v2-fixed-smoke3.json`). Chưa đủ điều kiện chạy 50 ca.
+
 ## 5. Chưa hoàn thành
 
 ### Cổng benchmark

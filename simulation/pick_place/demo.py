@@ -294,8 +294,14 @@ class Demo:
         error = scene.object_position()[:2] - scene.basket_floor()[:2]
         if float(np.linalg.norm(error)) <= C.SET_DOWN_CENTRING_TOLERANCE:
             return
+        original_z = float(scene.wrist_position(side)[2])
         target = scene.wrist_position(side)
         target[:2] -= error
+        # The mirrored left wrist often reaches the basket centre at floor height
+        # outside its IK workspace or inside the rim.  Solve the lateral correction
+        # from a raised hand, then let the normal seated descent close the final gap.
+        if side == "left":
+            target[2] += 0.03
         try:
             joints = solve_pose_ik(
                 self.model, side, target, orientation, self.data.ctrl[scene.arm_actuators[side]].copy()
@@ -310,7 +316,21 @@ class Demo:
         if hits:
             self.log.note(f"centring would put {', '.join(sorted(hits))} into the basket; setting down as planned")
             return
+        start_joints = self.data.ctrl[scene.arm_actuators[side]].copy()
         ex.move_to({f"{side}_arm": joints}, C.SET_DOWN_CENTRING_SECONDS)
+        if side == "left":
+            # Return to the original vertical level after the raised lateral move;
+            # the normal seated descent then remains responsible for floor contact.
+            lowered = target.copy()
+            lowered[2] = original_z
+            try:
+                lowered_joints = solve_pose_ik(
+                    self.model, side, lowered, orientation, self.data.ctrl[scene.arm_actuators[side]].copy()
+                )
+                ex.move_to({f"{side}_arm": lowered_joints}, C.SET_DOWN_CENTRING_SECONDS)
+            except RuntimeError:
+                self.log.note("left centring lowered pose unavailable; reverting to pre-centring pose")
+                ex.move_to({f"{side}_arm": start_joints}, C.SET_DOWN_CENTRING_SECONDS)
         moved = scene.object_position()[:2] - scene.basket_floor()[:2]
         self.log.record("set_down_centring_m", float(np.linalg.norm(error)))
         self.log.note(
