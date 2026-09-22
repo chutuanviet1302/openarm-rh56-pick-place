@@ -109,7 +109,7 @@ Success placement hiện yêu cầu footprint vật nằm trong lòng rổ và v
 ### Handoff
 
 - Chưa có executor handoff vật lý hoàn chỉnh.
-- Quét lại với orientation grasp riêng của từng RH56, tay giao nắm và tay nhận mở: 118 cặp pose đạt IK và joint margin; ứng viên ít xuyên nhất vẫn có 13 contact giữa hai tay, độ xuyên tối đa 19.2 mm. Chạy lại bằng `python -m scripts.check_handoff_geometry`. Đây là quét pose rời rạc, không chứng minh toàn bộ workspace bất khả thi.
+- Quét pose handoff với hai wrist target riêng, orientation grasp riêng và ràng buộc hai tâm kẹp phải cùng nằm trong chiều cao 100 mm của vật: 116 cặp đạt IK và joint margin, nhưng ứng viên tốt nhất vẫn có 53 contact giữa hai tay, độ xuyên tối đa 22.7 mm. Chạy lại bằng `python -m scripts.check_handoff_geometry`. Vì vậy direct handoff không thể được thực thi an toàn với collision mesh hiện tại; đây không phải lỗi control.
 - Router hiện chỉ có thể đề xuất `HANDOFF_RIGHT_TO_LEFT` hoặc `HANDOFF_LEFT_TO_RIGHT`; CLI dừng an toàn khi direct route không khả thi.
 - Chưa đạt handoff 5/5 cho bất kỳ hướng nào.
 - Model RH56DFX và adapter flange hiện chưa được xác nhận bằng CAD RH56F1 thật; không sửa kích thước collision mesh để làm handoff đạt giả. Cần model/đo thực tế hoặc vật có vùng nắm đủ dài cho hai tay, sau đó tìm đường tiếp cận liên tục và xác nhận proof-lift của tay nhận trước khi nhả tay giao.

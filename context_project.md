@@ -262,6 +262,6 @@ ros2 run openarm_pick_place mujoco_bridge --ros-args -p config_path:=$PWD/config
 - 23/09/2026: centring trái thử pose nâng 30 mm, hạ lại nếu IK cho phép; smoke 1/2, release vẫn còn lỗi khi hạ pose không khả thi.
 
 - 23/09/2026: phase_carry thử centring tay trái ở carry height và re-plan lower path; target gần mép rổ vẫn bị IK reject, smoke 1/2.
-- Quét handoff tĩnh với hai orientation RH56 riêng, tay giao nắm và tay nhận mở: 118 cặp pose có IK/joint margin nhưng tốt nhất vẫn xuyên nhau 19.2 mm tại 13 contact (`python -m scripts.check_handoff_geometry`). Chưa có handoff vật lý an toàn hoặc video handoff đạt.
+- Quét handoff tĩnh với hai wrist target riêng và ràng buộc hai tâm kẹp nằm trong chiều cao 100 mm của vật: 116 cặp có IK/joint margin nhưng tốt nhất vẫn xuyên nhau 22.7 mm tại 53 contact (`python -m scripts.check_handoff_geometry`). Direct handoff chưa có pose vật lý an toàn với collision mesh hiện tại.
 
 - Success placement được đánh giá theo containment trong lòng rổ + contact đáy, không bắt buộc tâm rổ. Tay trái containment benchmark đạt 10/10: artifacts/benchmarks/left-containment-10.json.

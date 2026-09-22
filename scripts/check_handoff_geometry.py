@@ -19,6 +19,9 @@ def main() -> None:
     scene = Scene((0.08, -0.38), (0.25, 0.25))
     model = scene.model
     planners = {side: GraspPlanner(scene, side) for side in ("right", "left")}
+    # The two jaw centres must overlap the same 100 mm bottle.  A pose with
+    # larger separation is merely two independent IK solutions, not a handoff.
+    object_height = scene.object_extents()[1]
     best: tuple[float, int, tuple] | None = None
     pairs = 0
     for x in (0.25, 0.30, 0.35, 0.40, 0.45):
@@ -40,6 +43,8 @@ def main() -> None:
                             candidates[side].append((yaw, dz, joints))
             for right_yaw, right_dz, right_joints in candidates["right"]:
                 for left_yaw, left_dz, left_joints in candidates["left"]:
+                    if abs(right_dz - left_dz) > object_height:
+                        continue
                     data = mujoco.MjData(model)
                     for side, joints, closed in (
                         ("right", right_joints, True),
@@ -59,7 +64,7 @@ def main() -> None:
                     candidate = (max(overlaps, default=0.0), len(overlaps), (x, z, right_yaw, right_dz, left_yaw, left_dz))
                     if best is None or candidate[:2] < best[:2]:
                         best = candidate
-    print(f"IK/joint-margin-valid hand pairs: {pairs}")
+    print(f"IK/joint-margin-valid hand pairs on one object: {pairs}")
     if best is None:
         print("No common IK pose in sampled workspace")
     else:
