@@ -295,6 +295,25 @@ class Demo:
                     candidate, centre_joints = chosen
                     if not np.allclose(candidate, current):
                         ex.move_to({arm: centre_joints}, C.SET_DOWN_CENTRING_SECONDS)
+                    # Refine residual error with small midpoint moves; this keeps each
+                    # IK request inside the left-arm basin instead of demanding one
+                    # unreachable lateral jump near the workspace edge.
+                    for _ in range(2):
+                        residual = scene.object_position()[:2] - scene.basket_floor()[:2]
+                        if float(np.linalg.norm(residual)) <= C.SET_DOWN_CENTRING_TOLERANCE:
+                            break
+                        step_target = scene.wrist_position(side).copy()
+                        step_target[:2] -= 0.5 * residual
+                        try:
+                            step_q = solve_pose_ik(
+                                self.model, side, step_target, self.planner.orientation,
+                                self.data.ctrl[scene.arm_actuators[side]].copy(),
+                            )
+                            if self.planner.hand_contacts(step_q, scene.basket_geoms, closed=True):
+                                break
+                            ex.move_to({arm: step_q}, C.SET_DOWN_CENTRING_SECONDS)
+                        except RuntimeError:
+                            break
                     self.log.record("carry_centring_error_m", error)
                     self.log.note(f"left carry-height centring corrected {np.linalg.norm(error)*1000:.1f}mm")
                     # Rebuild the lower path from the actual post-centring joint state.
