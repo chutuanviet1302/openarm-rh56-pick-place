@@ -55,9 +55,11 @@ class Plan:
 
 
 class GraspPlanner:
-    def __init__(self, scene: Scene, side: str = "right") -> None:
+    def __init__(self, scene: Scene, side: str = "right", *, use_seed_bank: bool = True) -> None:
         if side not in ("left", "right"):
             raise ValueError("side must be 'left' or 'right'")
+        # `use_seed_bank=False`: only the two reference IK seeds (see _grasp_solutions).
+        self.use_seed_bank = use_seed_bank
         self.scene = scene
         self.model = scene.model
         self.side = side
@@ -306,7 +308,7 @@ class GraspPlanner:
                 return candidate, center
         raise RuntimeError("no clear raise way point:\n    " + "\n    ".join(failures))
 
-    def _grasp_solutions(self, target: np.ndarray) -> list[np.ndarray]:
+    def _grasp_solutions(self, target: np.ndarray, use_bank: bool) -> list[np.ndarray]:
         """IK solutions for the grasp pose, in the order they should be tried.
 
         The two reference seeds come first (reference posture, then the natural
@@ -326,7 +328,11 @@ class GraspPlanner:
                 q = solve_pose_ik(self.model, self.side, target, self.orientation, seed, max_iterations=iterations)
             except RuntimeError:
                 return None
-            if self.joint_margin_degrees(q) < C.MIN_JOINT_MARGIN_DEG:
+            margin = self.joint_margin_degrees(q)
+            if margin < C.MIN_JOINT_MARGIN_DEG:
+                # Remembered so a pose that exists but pins a joint is reported as
+                # such, not as "unreachable".
+                self._low_margin = max(self._low_margin, margin)
                 return None
             if any(np.max(np.abs(q - other)) < C.GRASP_SEED_DUPLICATE_RAD for other in found):
                 return None
@@ -336,7 +342,8 @@ class GraspPlanner:
             q = solve(seed, C.IK_MAX_ITERATIONS)
             if q is not None:
                 found.append(q)
-        classic = len(found)
+        if not use_bank:
+            return found
         ids = np.array([self.model.joint(name).id for name in C.ARM_JOINTS[self.side]])
         lower, upper = self.model.jnt_range[ids].T
         rng = np.random.default_rng(C.GRASP_SEED_BANK_RNG)
@@ -347,23 +354,30 @@ class GraspPlanner:
                 bank.append(q)
                 found.append(q)
         bank.sort(key=self.joint_margin_degrees, reverse=True)
-        return found[:classic] + bank
+        return bank
 
     def _plan_pick(self, object_position: np.ndarray) -> Plan:
         base_centers = self.centers(object_position)
         base_orientation = self.orientation
-        solutions = self._grasp_solutions(base_centers["grasp"])
-        if not solutions:
-            raise RuntimeError(f"IK failed for {self.side} target {base_centers['grasp'].tolist()}")
-        errors = []
-        for grasp_joints in solutions[: C.GRASP_CHAIN_ATTEMPTS]:
-            self.orientation = base_orientation
-            try:
-                return self._chain_from_grasp(object_position, {k: v.copy() for k, v in base_centers.items()}, grasp_joints)
-            except RuntimeError as error:
-                errors.append(str(error).splitlines()[0])
+        # The seed bank costs ~40 IK solves per heading, so it only runs when the
+        # reference seeds found nothing that chains (a plain pick never pays for it).
+        errors, tried = [], 0
+        self._low_margin = -np.inf
+        for use_bank in (False, True) if self.use_seed_bank else (False,):
+            solutions = self._grasp_solutions(base_centers["grasp"], use_bank)
+            tried += len(solutions)
+            for grasp_joints in solutions[: C.GRASP_CHAIN_ATTEMPTS]:
+                self.orientation = base_orientation
+                try:
+                    return self._chain_from_grasp(object_position, {k: v.copy() for k, v in base_centers.items()}, grasp_joints)
+                except RuntimeError as error:
+                    errors.append(str(error).splitlines()[0])
         self.orientation = base_orientation
-        raise RuntimeError(f"{len(solutions)} grasp solution(s), none chains: {errors[0]}")
+        if not tried and np.isfinite(self._low_margin):
+            raise RuntimeError(f"grasp joint margin only {self._low_margin:.1f}deg")
+        if not tried:
+            raise RuntimeError(f"IK failed for {self.side} target {base_centers['grasp'].tolist()}")
+        raise RuntimeError(f"{tried} grasp solution(s), none chains: {errors[0]}")
 
     def _chain_from_grasp(self, object_position: np.ndarray, centers: dict, grasp_joints: np.ndarray) -> Plan:
         """Standoff, hover, raise and lift walked off one grasp solution (same branch)."""

@@ -380,7 +380,16 @@ class Demo:
         self.log.record("set_down_descent_m", went)
         self.log.note(f"descended {went*100:.1f}cm more; object {'rests on' if touching else 'is NOT on'} the basket floor")
         if not touching:
-            raise RuntimeError(f"set-down failed: object still off the floor after {went*100:.1f}cm of descent")
+            # The arm can run out of reach a few mm above the floor (at full extension
+            # after the robot was re-measured 3cm lower, 2026-09-23: 4mm short on the
+            # default layout). Letting go from that low is a benign drop; anything
+            # higher, or with the can not fully over the basket floor, is a failure.
+            _, height = scene.object_extents()
+            gap = float(scene.object_position()[2]) - 0.5 * height - float(scene.basket_floor()[2]) - 0.005
+            if gap > C.SET_DOWN_MAX_RELEASE_GAP or not scene.object_inside_basket():
+                raise RuntimeError(f"set-down failed: object still off the floor after {went*100:.1f}cm of descent")
+            self.log.record("set_down_release_gap_m", gap)
+            self.log.note(f"arm at full reach; releasing {gap*1000:.1f}mm above the basket floor")
 
     def _centre_over_basket(self, orientation: np.ndarray) -> None:
         """Slide the wrist so the object -- not the wrist -- hangs over the basket centre.

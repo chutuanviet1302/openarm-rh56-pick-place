@@ -168,6 +168,9 @@ TRANSFER_LONG_PATH_M = 0.45
 
 # --------------------------------------------------------------------------- proof lift
 PROOF_LIFT_HEIGHT = 0.05
+# Highest gap (can bottom over the basket floor) the hand may let go from when the
+# arm reaches its limit before the can touches down.
+SET_DOWN_MAX_RELEASE_GAP = 0.008
 # Twist-lift fallback (GraspPlanner._twist_approach): hand turn about the can's axis
 # between grasp and lift, tried in this order when the straight lift hits a joint stop.
 TWIST_LIFT_CANDIDATES_DEG = (-30.0, 30.0, -45.0, 45.0, -60.0, 60.0)
@@ -223,6 +226,8 @@ MOVE_TO_GRASP = 1.0
 PROOF_LIFT_SECONDS = 0.8
 MOVE_TO_LIFT = 1.8
 TRANSFER_SECONDS = 2.5
+# Average joint speed cap for waypoint following (Executor.follow), arm and hand.
+MAX_JOINT_SPEED_RAD_S = 0.6
 LOWER_SECONDS = 1.2
 ALL_FINGERS = ("index", "middle", "ring", "pinky", "thumb")
 RELAX_GRIP_SECONDS = 0.6  # grip force -> light contact before the fingers open

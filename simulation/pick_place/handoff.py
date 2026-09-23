@@ -37,6 +37,10 @@ HANDOFF_X_RANGE = (0.16, 0.34)
 HANDOFF_X_STEP = 0.03
 HANDOFF_Y_RANGE = (-0.05, 0.05)
 HANDOFF_Y_STEP = 0.025
+# The object never lands exactly on the staging point (18mm off measured on the
+# router's opposite-workspace layout, 2026-09-23), so the target arm must be able to
+# pick it up anywhere within this radius of the point, not just at the point itself.
+HANDOFF_LANDING_TOLERANCE = 0.02
 
 
 def _leg_reachable(pick_position: tuple[float, float], place_position: tuple[float, float], side: str) -> bool:
@@ -44,8 +48,14 @@ def _leg_reachable(pick_position: tuple[float, float], place_position: tuple[flo
         scene = Scene(pick_position, place_position)
     except ValueError:
         return False
+    # Reference seeds only. The grasp seed bank reaches edge-of-workspace branches
+    # that a relay then cannot carry on: on the router's opposite-workspace layout it
+    # yielded staging points (0.22-0.255, 0.02-0.025) whose physics runs dropped the
+    # can in the carry or missed the pick-up in 5 of 6 trials, at 0.6 and 0.3 rad/s
+    # alike (2026-09-23). A relay chains two such legs; it is only offered on grasps
+    # the reference posture reaches.
     try:
-        GraspPlanner(scene, side).plan(scene.object_position())
+        GraspPlanner(scene, side, use_seed_bank=False).plan(scene.object_position())
     except RuntimeError:
         return False
     return True
@@ -65,8 +75,16 @@ def find_handoff_point(
             if not _leg_reachable(pick_position, candidate, source):
                 failures.append(f"{candidate}: {source} cannot place here")
                 continue
-            if not _leg_reachable(candidate, basket_position, target):
-                failures.append(f"{candidate}: {target} cannot pick up from here")
+            tol = HANDOFF_LANDING_TOLERANCE
+            # 3x3 grid, diagonals included: the measured miss was diagonal (landed at
+            # (0.200, 0.011) for a (0.22, 0.025) staging point).
+            landings = [candidate] + [
+                (candidate[0] + dx, candidate[1] + dy)
+                for dx in (-tol, 0.0, tol) for dy in (-tol, 0.0, tol) if dx or dy
+            ]
+            missed = next((p for p in landings if not _leg_reachable(p, basket_position, target)), None)
+            if missed is not None:
+                failures.append(f"{candidate}: {target} cannot pick up from {tuple(round(v, 3) for v in missed)}")
                 continue
             return candidate
     raise RuntimeError(f"no staging point reachable by both {source} and {target}:\n  " + "\n  ".join(failures))

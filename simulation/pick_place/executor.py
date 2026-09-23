@@ -104,6 +104,16 @@ class Executor:
         """Follow waypoints with continuous joint velocity and zero-speed endpoints."""
         groups = list(waypoints)
         paths = {group: [self.data.qpos[self.scene.qpos_for(group)].copy(), *waypoints[group]] for group in groups}
+        # Joint speed limit: stretch any segment whose largest joint move would exceed
+        # MAX_JOINT_SPEED_RAD_S on average. Without it a 0.18rad waypoint step in a
+        # 0.09s slot flung a held can out of the hand (7cm wrist jump in 0.15s at the
+        # start of a carry, 2026-09-23) -- and it caps the DM motors' commanded speed.
+        durations = [
+            max(float(duration), max(
+                float(np.max(np.abs(paths[group][index + 1] - paths[group][index]))) for group in groups
+            ) / C.MAX_JOINT_SPEED_RAD_S)
+            for index, duration in enumerate(durations)
+        ]
         cumulative = np.cumsum([0.0, *durations])
         steps = self.seconds_to_steps(cumulative[-1])
         for index in range(steps):
