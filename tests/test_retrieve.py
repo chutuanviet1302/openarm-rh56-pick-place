@@ -50,6 +50,22 @@ class RetrieveFromBasketTests(unittest.TestCase):
         self.assertLess(result.placement_error_m, 0.05)
         self.assertLess(result.bottle_tilt_deg, 15.0)
 
+    def test_right_places_left_retrieves_centre_basket(self):
+        """Basket on the table centreline (y=0). Sim-only layout: arm roots 0.06m
+        off centre, left mount turned -95deg and right +40deg about the vertical --
+        the left arm's grasp window and the right arm's placing reach only meet
+        at the centre with both turned. The executor aborts on any arm-arm contact
+        and on the idle arm touching the object, so a pass means neither
+        happened."""
+        task = RetrieveDemo(
+            (0.26, -0.26), (0.32, 0.0), (0.34, 0.16), side="left", place_side="right",
+            arm_half_separation=0.06, left_arm_mount_yaw_deg=-95.0, right_arm_mount_yaw_deg=40.0,
+        )
+        result = run_retrieve_trial(task)
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertEqual((result.source_arm, result.target_arm), ("right", "left"))
+        self.assertLess(result.bottle_tilt_deg, 15.0)
+
     def test_place_leg_failure_is_not_masked_as_a_retrieve_failure(self):
         """An unreachable pick position must fail in the place-into-basket leg
         with its own reason, not be silently swallowed or blamed on retrieval."""

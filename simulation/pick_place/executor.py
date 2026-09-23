@@ -28,6 +28,9 @@ class Executor:
         self.max_penetration_m = 0.0
         # Optional hook called after every physics step (used by --trace).
         self.on_step = on_step
+        # The arm doing the task. When set, the *other* arm touching the object is
+        # a collision too (its resting pose must stay out of the working arm's way).
+        self.active_side: str | None = None
 
     # ------------------------------------------------------------------ stepping
     def _step(self) -> None:
@@ -48,6 +51,19 @@ class Executor:
             self.max_penetration_m = max(self.max_penetration_m, max(-depth for depth in offenders.values()) / 1000.0)
             detail = ", ".join(f"{body} {depth:.1f}mm" for body, depth in sorted(offenders.items()))
             raise RuntimeError(f"trajectory aborted: {detail} colliding with the basket")
+        offenders = self.scene.inter_arm_contacts()
+        if offenders:
+            detail = ", ".join(f"{pair} {depth:.1f}mm" for pair, depth in sorted(offenders.items()))
+            raise RuntimeError(f"trajectory aborted: the two arms touch ({detail})")
+        if self.active_side is not None:
+            idle = "left" if self.active_side == "right" else "right"
+            for contact in self.data.contact[: self.data.ncon]:
+                geoms = (contact.geom1, contact.geom2)
+                if self.scene.object_geom in geoms and float(contact.dist) < 0.0:
+                    other = geoms[1] if geoms[0] == self.scene.object_geom else geoms[0]
+                    if self.scene.robot_side(other) == idle:
+                        body = self.model.body(int(self.model.geom_bodyid[other])).name
+                        raise RuntimeError(f"trajectory aborted: idle {idle} arm ({body}) touches the object")
 
     def _render(self) -> None:
         """Redraw once per frame and pace to real time (sync + sleep after *every* 1ms

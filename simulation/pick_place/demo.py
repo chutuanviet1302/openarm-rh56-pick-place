@@ -51,6 +51,7 @@ class Demo:
         self.scene = scene if scene is not None else Scene(pick_position, basket_position)
         self.planner = GraspPlanner(self.scene, side)
         self.executor = Executor(self.scene)
+        self.executor.active_side = side
         self.log = EpisodeLog(lambda: self.scene.data.time, verbose=verbose)
         # With perception on, the object's position comes from the camera (RGB-D ->
         # deprojection), never from the simulator state; the error against ground truth
@@ -532,6 +533,7 @@ class Demo:
         self.scene.reset()
         self.log = EpisodeLog(lambda: self.scene.data.time, verbose=self.log.verbose)
         self.executor = Executor(self.scene, on_step=self.executor.on_step)
+        self.executor.active_side = self.side
         self.perceived_position = None
         self.light_grip_ctrl: np.ndarray | None = None
         self.failed_grasp_yaws: list[float] = []

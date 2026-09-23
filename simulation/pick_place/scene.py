@@ -38,12 +38,14 @@ class Scene:
     def __init__(
         self, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B, *,
         arm_half_separation: float | None = None, left_arm_mount_yaw_deg: float | None = None,
+        right_arm_mount_yaw_deg: float | None = None,
     ) -> None:
         self.pick_position = tuple(float(v) for v in pick_position)
         self.basket_position = tuple(float(v) for v in basket_position)
         self.model = build_five_finger_model(
             pick_bottle=True, pick_position=self.pick_position, basket_position=self.basket_position,
             arm_half_separation=arm_half_separation, left_arm_mount_yaw_deg=left_arm_mount_yaw_deg,
+            right_arm_mount_yaw_deg=right_arm_mount_yaw_deg,
         )
         self.data = mujoco.MjData(self.model)
         # The grasp orientation is whatever the hand has when the wrist is straight in
@@ -303,6 +305,34 @@ class Scene:
     def basket_contacts(self) -> dict[str, float]:
         """Which arm/hand parts are colliding with the basket, and how deep (mm)."""
         return self._penetrations(self.basket_geoms, BASKET_CONTACT_TOLERANCE, ignore={self.object_geom})
+
+    def robot_side(self, geom: int) -> str | None:
+        """'left'/'right' for any geom on that arm or hand, None for everything else
+        (torso, table, basket, object)."""
+        hand = self.hand_side(geom)
+        if hand is not None:
+            return hand
+        body = int(self.model.geom_bodyid[geom])
+        while body:
+            name = self.model.body(body).name or ""
+            for side in ("left", "right"):
+                if name.startswith(f"openarm_{side}_link"):
+                    return side
+            body = int(self.model.body_parentid[body])
+        return None
+
+    def inter_arm_contacts(self, tolerance: float = 0.0) -> dict[str, float]:
+        """Left-arm/hand bodies touching right-arm/hand bodies: {'a <-> b': depth mm}.
+        The two arms must never touch -- neither the links nor the hands."""
+        hits: dict[str, float] = {}
+        for contact in self.data.contact[: self.data.ncon]:
+            sides = {self.robot_side(contact.geom1), self.robot_side(contact.geom2)}
+            if sides != {"left", "right"} or float(contact.dist) > -tolerance:
+                continue
+            names = sorted(self.model.body(int(self.model.geom_bodyid[g])).name for g in (contact.geom1, contact.geom2))
+            key = f"{names[0]} <-> {names[1]}"
+            hits[key] = min(hits.get(key, 0.0), float(contact.dist) * 1000.0)
+        return hits
 
     def finger_contact_forces(self, side: str) -> dict[str, float]:
         """Per-finger normal contact force (N) against the object, from mj_contactForce

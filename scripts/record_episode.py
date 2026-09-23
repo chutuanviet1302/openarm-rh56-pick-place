@@ -183,6 +183,7 @@ def record_retrieve(args: argparse.Namespace) -> Path:
     scene = Scene(
         tuple(args.object), tuple(args.basket),
         arm_half_separation=args.arm_half_separation, left_arm_mount_yaw_deg=args.left_mount_yaw,
+        right_arm_mount_yaw_deg=args.right_mount_yaw,
     )
     place_in = Demo(perception=args.perception, side=place_side, scene=scene)
     place_in.scene.reset()
@@ -232,6 +233,7 @@ def record_retrieve(args: argparse.Namespace) -> Path:
             "object": list(args.object), "basket": list(args.basket), "retrieve_to": list(retrieve_to),
             "perception": args.perception, "arm": side, "place_arm": place_side, "mode": "retrieve",
             "arm_half_separation": args.arm_half_separation, "left_mount_yaw_deg": args.left_mount_yaw,
+            "right_mount_yaw_deg": args.right_mount_yaw,
         },
         "fps": args.fps,
         "frames": recorder.frames,
@@ -297,6 +299,8 @@ def main() -> None:
                         help="simulation fixture: distance from torso centre to each arm root (m)")
     parser.add_argument("--left-mount-yaw", type=float, default=None,
                         help="simulation fixture: turn the left arm mount about the vertical (deg)")
+    parser.add_argument("--right-mount-yaw", type=float, default=None,
+                        help="simulation fixture: turn the right arm mount about the vertical (deg)")
     parser.add_argument("--perception", action="store_true", help="object position from the head camera (RGB-D)")
     parser.add_argument("--arm", choices=("auto", "right", "left"), default="auto")
     parser.add_argument("--name", help="episode folder name (default: timestamp)")

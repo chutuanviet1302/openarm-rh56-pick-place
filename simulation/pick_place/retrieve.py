@@ -148,6 +148,7 @@ class RetrieveDemo:
         side: str = "left",
         place_side: str | None = None,
         left_arm_mount_yaw_deg: float | None = None,
+        right_arm_mount_yaw_deg: float | None = None,
         arm_half_separation: float | None = None,
         perception: bool = False,
         verbose: bool = False,
@@ -163,6 +164,7 @@ class RetrieveDemo:
         scene = Scene(
             self.pick_position, self.basket_position,
             arm_half_separation=arm_half_separation, left_arm_mount_yaw_deg=left_arm_mount_yaw_deg,
+            right_arm_mount_yaw_deg=right_arm_mount_yaw_deg,
         )
         self.place_in = Demo(perception=perception, verbose=verbose, side=self.place_side, scene=scene)
         self.retrieve: Demo | None = None
