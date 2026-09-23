@@ -1,8 +1,10 @@
 # Context Project — OpenArm + Inspire RH56 + D435 Pick & Place
 
-Cập nhật: 2026-09-21 (phiên chiều — Stage 1/2 theo kế hoạch pipeline hai tay). File này tóm tắt project cho phiên làm việc mới (người hoặc AI) đọc để nắm ngữ cảnh nhanh, không cần đọc lại toàn bộ lịch sử commit/chat.
+Cập nhật: 2026-09-23 (task rổ giữa bàn hai tay; trước đó 2026-09-21 Stage 1/2). File này tóm tắt project cho phiên làm việc mới (người hoặc AI) đọc để nắm ngữ cảnh nhanh, không cần đọc lại toàn bộ lịch sử commit/chat.
 
 **Đọc mục 0 trước** — đó là trạng thái mới nhất và việc đang dở; mục 1–8 bên dưới là bối cảnh nền, một số con số đã lỗi thời (đánh dấu ở từng chỗ).
+
+> **Mới nhất (23/09/2026):** task "tay phải đặt vào rổ giữa bàn → tay trái lấy ra" đã PASS trên bố trí mô phỏng (xoay đế tay), kèm chốt an toàn hai-tay-không-chạm. Xem mục cuối file **"Tiến độ 23/09/2026"**. Các mục handoff/retrieve 22/09 phía dưới là lịch sử điều tra dẫn tới kết quả đó.
 
 ### Bổ sung 22/09/2026 — fixture v2 và kiểm chứng tiếp theo
 
@@ -296,3 +298,37 @@ ros2 run openarm_pick_place mujoco_bridge --ros-args -p config_path:=$PWD/config
 - Bài học: "gần tâm" (y≈0) và "xa 30cm" (x=0.30) là hai giới hạn ĐỘC LẬP, bị nhầm thành một vì mọi layout test trước đó kết hợp cả hai cùng lúc. x=0.30 vẫn thật sự bất khả (đã kiểm chứng kỹ). y=0.0 tự nó không phải rào cản.
 - Đã thêm test khóa lại: `tests/test_bimanual_routing.py::test_delivers_object_to_true_centreline_basket`. Lệnh tái tạo: `python -m simulation.pick_place_demo --object 0.10 -0.35 --basket 0.22 0.0`.
 - (Đã thử và revert: thêm `pedestal_forward_offset_m` vào `five_finger_model.py`/`scene.py` — không giải quyết được vấn đề gốc (orientation, không phải vị trí lắp) nên đã bỏ. Đã thử và revert: thêm bank seed dự phòng (`_solve_with_retries`) vào `planner.py` — kỹ thuật hoạt động nhưng phá vỡ `test_grasp_at_joint_limit_is_not_an_executable_layout`, một test an toàn có chủ đích; đã bỏ vì xung đột trực tiếp với quyết định an toàn đã có của dự án.)
+
+## Tiến độ 23/09/2026: tay phải đặt vào rổ giữa bàn → tay trái lấy ra (đã đạt, bố trí mô phỏng)
+
+**Trạng thái:** task "tay phải nắm vật đặt vào rổ ở giữa bàn, tay trái nắm vật từ rổ nhấc ra đặt lên bàn" chạy vật lý **PASS**, hai tay không chạm nhau. Đã commit + push (`2aa82e8` trên `origin/master`).
+
+**Layout đạt (chỉ có trong mô phỏng, chưa có trên phần cứng thật):**
+- Vật A=(0.26,-0.26) → rổ B=(0.32, **0.0**) (đúng trục giữa, thẳng trước thân) → đặt ra C=(0.34,0.16).
+- `arm_half_separation=0.06` (mặc định vendor 0.031), `left_arm_mount_yaw_deg=-95`, `right_arm_mount_yaw_deg=+40` (xoay đế tay quanh trục đứng). Chiều dài link, giới hạn khớp, tư thế nắm: giữ nguyên của vendor.
+- Kết quả: sai số đặt 30.5mm, nghiêng cuối 0°, xuyên thấu 0mm.
+- Lệnh: `RetrieveDemo((0.26,-0.26),(0.32,0.0),(0.34,0.16), side="left", place_side="right", arm_half_separation=0.06, left_arm_mount_yaw_deg=-95, right_arm_mount_yaw_deg=40)`. Test: `tests/test_retrieve.py::test_right_places_left_retrieves_centre_basket`. Episode trên web viewer: `centre-basket-right-in-left-out`.
+
+**Vì sao cần đổi bố trí (đã đo, không đoán):**
+- Bố trí gốc: tay phải đặt được tới giữa bàn, nhưng tay trái không nắm được ở bất kỳ điểm nào quanh giữa (0/20 vị trí). Vùng nắm của mỗi tay nằm lệch ra ngoài vai của nó ~0.25–0.40m, nên không có vị trí rổ nào cả hai cùng dùng được.
+- Xoay đế tay làm vùng nắm quay quanh vai. Xoay đối xứng thì cả hai vùng cùng dồn vào giữa, khiến tay phải mất chỗ nhặt vật. Phải xoay **bất đối xứng**: trái nhiều (-95°), phải ít (+40°).
+- Chỉ xoay đế trái -115/-120° với khoảng cách vendor thì khâu 1 tay trái va vào đế tay phải: khớp 1 kẹt thiếu 25.5°, tay trượt vật (lực 5 ngón = 0).
+- Cửa sổ nắm của tay trái ở giữa bàn rất hẹp (x≈0.305–0.35m). Chọn -95° vì cửa sổ đó phủ đúng điểm vật thực sự rơi sau chặng 1, (0.308,-0.013); ở -85° vật rơi hụt ngoài cửa sổ vài mm.
+
+**An toàn (thêm vào code, áp dụng cho MỌI episode):**
+- `Scene.robot_side()`, `Scene.inter_arm_contacts()`: phát hiện mọi tiếp xúc giữa phần trái và phần phải của robot (cả khâu tay lẫn bàn tay).
+- `Executor._check_collisions` dừng ngay khi (a) hai tay chạm nhau, hoặc (b) tay đang nghỉ chạm vào vật (`Executor.active_side`, do `Demo` gán). Lỗi (b) đã xảy ra thật khi đổi bố trí: tư thế nghỉ của tay trái nằm trên đường tay phải mang vật, làm vật bị hất.
+- Đo trên quỹ đạo đã chạy (layout đạt):
+  - Khoảng cách nhỏ nhất giữa hai tay: **23.5mm** (ngón trỏ trái ↔ khâu 6 tay phải).
+  - Margin khớp nhỏ nhất khi chuyển động: tay trái **3.8°** (khớp 5), tay phải **4.1°** (khớp 1); ngưỡng planner ≥3°.
+  - **Chưa giải quyết:** khớp 4 của cả hai tay nằm đúng giới hạn 0° ở tư thế nghỉ (`ATTENTION_RIGHT = zeros`, tay buông thẳng, dải khớp 4 là [0°,140°]). Tư thế này có sẵn từ trước và dùng chung cho mọi episode. Muốn sửa thì phải cho khớp 4 gập nhẹ ở tư thế nghỉ, rồi chạy lại toàn bộ test/benchmark vì mọi đường nâng tay đều xuất phát từ tư thế này.
+- Chỉ số rủi ro còn lại: margin 3.8–4.1° chỉ vừa trên ngưỡng 3°; điểm đặt ra C=(0.34,0.16) là ứng viên duy nhất lập được kế hoạch (margin khớp tại điểm đặt 3.2°). Layout này đang ở sát rìa vùng với-tới, chưa chạy nhiều lần có nhiễu.
+
+**Tham số mới (opt-in, mặc định không đổi gì):** `left_arm_mount_yaw_deg`, `right_arm_mount_yaw_deg` (`five_finger_model.build_five_finger_spec`, `Scene`); `RetrieveDemo(place_side=..., arm_half_separation=..., left_arm_mount_yaw_deg=..., right_arm_mount_yaw_deg=...)`; `scripts/record_episode.py --place-arm --arm-half-separation --left-mount-yaw --right-mount-yaw`.
+
+**Test:** full suite 60/61. Test duy nhất fail là `test_twenty_trials_acceptance` (ngẫu nhiên, đã fail từ trước phiên này với lý do lift/transfer thấp); đang chạy lại riêng để xác nhận không liên quan đến chốt an toàn mới.
+
+**Việc tiếp theo đề xuất:**
+1. Sửa tư thế nghỉ để khớp 4 không nằm đúng giới hạn.
+2. Chạy nhiều trial có nhiễu vị trí vật cho layout rổ giữa bàn (hiện mới chạy 1 layout cố định).
+3. Nếu muốn đưa lên robot thật: đo/chế tạo đế tay xoay tương ứng, hoặc tìm chiến lược nắm khác cho vùng giữa bàn thay vì xoay đế.
