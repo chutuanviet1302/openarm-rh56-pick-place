@@ -51,6 +51,7 @@ def phase_carry_out(demo: Demo, retrieve_to: tuple[float, float]) -> None:
     apply, there are no walls to fall short of here."""
     ex, plan, scene, side = demo.executor, demo.plan, demo.scene, demo.side
     arm = f"{side}_arm"
+    demo.resolve_lift_from_here()
     ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
     clearance = scene.object_bottom_z() - scene.basket_rim_z()
     if clearance < C.CARRY_CLEARANCE_ABOVE_RIM - 0.005:

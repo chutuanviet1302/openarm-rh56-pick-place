@@ -375,3 +375,25 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 1. Chạy lại toàn bộ test (lần chạy trước bị ngắt, chưa có tổng kết) — seed bank có thể đổi kết quả các test cũ (lần trước một seed bank đã làm hỏng một test an toàn).
 2. Làm transfer/place của tay phải cũng dùng seed bank; cho retrieve lập kế hoạch lại theo vị trí lon thật sau khi thả.
 3. Khi pass: đo khoảng cách hai tay, margin khớp, độ lún vào bàn/rổ/bệ (yêu cầu: không chạm bàn, không va chạm), rồi mở `python -m scripts.view_retrieve` cho người dùng xem.
+
+## Tiến độ 24/09/2026 — kết luận bài rổ giữa bàn (robot đúng chiều cao)
+
+**Kết luận (báo mentor):** trên robot thật (vai 0.697 m trên mặt bàn, tay + bàn tay ~0.63 m, khớp vai 2 chỉ khép +10°) và với các ràng buộc an toàn (không chạm bàn/rổ/bệ, không lún vật, margin khớp >= 3°, giới hạn tốc độ khớp), **không có vị trí rổ nào để "tay phải đặt vào rổ, tay trái lấy ra" chạy ổn định**:
+- Tay phải đặt lệch trái trong rổ tối đa y ≈ +0.04 m (rổ x 0.25–0.26). Rổ dời sang trái (tâm y 0.05/0.07/0.09, x 0.22–0.28, 6 điểm nắm khác nhau) -> tay phải không đặt được (bàn tay vướng thành rổ phía gần).
+- Tay trái chỉ nắm được lon trong rổ khi y >= ~+0.03 m, chỉ ở hướng nắm -60°. Vùng chung ~1 cm < sai số thả lon (±1.5 cm); lệch 2 mm là kế hoạch đổi từ được sang không.
+- Rổ x = 0.30 m: tay phải không đặt lệch trái được. Kê bệ 5–10 cm: tay trái mất hết nghiệm.
+- Thí nghiệm hạ đế robot 10–30 cm CHƯA có kết luận: tư thế nghỉ và hướng nắm phải chỉnh lại theo độ cao mới rồi mới đo được.
+
+**Đề xuất:** (1) robot đứng trên sàn cạnh bàn như thiết kế OpenArm, hoặc hạ đế (cần thí nghiệm đầy đủ); (2) hoặc đổi nhiệm vụ để mỗi tay làm trong vùng của nó; (3) bài trung chuyển qua điểm giữa (0.08,-0.38)->(0.25,0.25) cũng không ổn định (lon tuột 5/6 lần) -> router từ chối.
+
+**Chạy được, đã kiểm chứng:** cùng một tay (phải) đặt vào rổ rồi lấy ra: nắm (0.08,-0.38) -> rổ (0.25,-0.25) -> đặt (0.15,-0.40): sai số 27 mm, nghiêng 0°, không lún. Xem: `python -m scripts.view_retrieve`.
+
+**Thay đổi an toàn/planner (23–24/09):**
+- Giới hạn tốc độ khớp trung bình 0.6 rad/s trong `Executor.follow` (trước đó một bước 0.18 rad/0.09 s hất văng lon).
+- Thả lon ở khe hở <= 8 mm khi tay đã duỗi hết tầm (lon phải nằm trọn trong rổ).
+- Bộ seed IK cho tư thế nắm (chỉ chạy khi 2 seed chuẩn không nối được chuỗi) và cho đường mang (đi ngược từ tư thế đặt về tư thế nâng).
+- Sửa lỗi: hướng tay đã xoay (twist-lift) còn sót lại làm IK tư thế nắm lệch 45°.
+- Router trung chuyển: điểm trung chuyển phải chịu sai số rơi ±2 cm (lưới 3×3) và không dùng bộ seed.
+- Đã thử rồi bỏ (làm tệ hơn hoặc đo sai): vòng giữ lực nắm (ngón cái đã ở giới hạn hành trình -> lon bị ép bật ra), kiểm tra "bàn tay mở lún vào vật" (loại cả tư thế chạy tốt).
+- Xoá 2 test lấy chéo tay dựa trên đế xoay giả (-95/-100°, +40°): robot thật không có đế xoay.
+- **Còn mở (24/09):** `test_trial_records_full_evidence` (Demo perception, layout mặc định) đặt lệch 21.5 mm > ngưỡng 20 mm. Lon được căn còn 6.9 mm ở độ cao mang nhưng trôi ~13 mm trong đoạn hạ xuống đáy rổ. Hỏng từ khi thêm giới hạn tốc độ khớp (ở e434639 lon còn rơi khi nâng; đã sửa bằng `Demo.resolve_lift_from_here`: giải lại tư thế nâng từ tư thế hiện tại để khuỷu liên tục). Cần tinh chỉnh đoạn hạ; không nới ngưỡng. Toàn bộ test: 59/60 (trước 2 sửa cuối).

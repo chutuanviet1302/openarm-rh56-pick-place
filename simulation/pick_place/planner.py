@@ -308,6 +308,13 @@ class GraspPlanner:
                 return candidate, center
         raise RuntimeError("no clear raise way point:\n    " + "\n    ".join(failures))
 
+    def _seed_bank(self, size: int) -> list[np.ndarray]:
+        """Fixed (GRASP_SEED_BANK_RNG) joint seeds spread over the arm's ranges."""
+        ids = np.array([self.model.joint(name).id for name in C.ARM_JOINTS[self.side]])
+        lower, upper = self.model.jnt_range[ids].T
+        rng = np.random.default_rng(C.GRASP_SEED_BANK_RNG)
+        return [lower + (upper - lower) * rng.uniform(0.1, 0.9, len(lower)) for _ in range(size)]
+
     def _grasp_solutions(self, target: np.ndarray, use_bank: bool) -> list[np.ndarray]:
         """IK solutions for the grasp pose, in the order they should be tried.
 
@@ -364,6 +371,9 @@ class GraspPlanner:
         errors, tried = [], 0
         self._low_margin = -np.inf
         for use_bank in (False, True) if self.use_seed_bank else (False,):
+            # A failed twist-lift attempt leaves its turned heading on self.orientation;
+            # the grasp itself is always solved at the plan's grasp heading.
+            self.orientation = base_orientation
             solutions = self._grasp_solutions(base_centers["grasp"], use_bank)
             tried += len(solutions)
             for grasp_joints in solutions[: C.GRASP_CHAIN_ATTEMPTS]:
@@ -508,61 +518,78 @@ class GraspPlanner:
             C.NATURAL_GRASP_JOINTS if self.side == "right" else C.NATURAL_GRASP_JOINTS * C.MIRROR_JOINT_SIGNS,
         )
         feasible = []
-        for yaw in C.PLACE_YAW_CANDIDATES_DEG:
-            centers_yaw = {**plan.centers, **{
-                k: v for k, v in self.centers(object_position, yaw, held_offset, place_floor).items()
-                if k in ("transfer", "lower")
-            }}
-            for strategy, route in self.transfer_route_candidates(lift_center, centers_yaw["transfer"]):
-                solved, seed_errors = None, []
-                for transfer_seed in transfer_seeds:
-                    try:
-                        transfer_path, seed = [], transfer_seed
-                        for segment_index, (start, end) in enumerate(zip(route, route[1:])):
-                            segment = self._walk(start, end, seed, C.CARRY_PATH_STEPS,
-                                orientation_at=lambda f, yaw=yaw, first=segment_index == 0:
-                                    rotation_z(yaw * f if first else yaw) @ self.orientation)
-                            transfer_path.extend(segment)
-                            seed = segment[-1]
-                        lower_path = self._walk(centers_yaw["transfer"], centers_yaw["lower"], seed, C.CARRY_PATH_STEPS,
-                            orientation_at=lambda f, yaw=yaw: rotation_z(yaw) @ self.orientation)
-                    except RuntimeError as error:
-                        seed_errors.append(str(error).splitlines()[0])
-                        continue
-                    # A walk can complete on a pinched branch the margin test then
-                    # rejects; the next seed may carry the same route through with
-                    # room to spare, so acceptance is checked per seed here. The
-                    # accepted path must also START from where the arm really is:
-                    # a whole-path seed whose first waypoint jumps in joint space
-                    # (measured 1.25 rad lift->wp0 on the centreline layout) makes
-                    # the follower teleport the arm and shake the can loose -- the
-                    # carry then fails "transfer too low" in physics even though
-                    # every waypoint validated. The same-jump problem is fixed, not
-                    # just rejected: the blend from the lift pose to that first
-                    # waypoint is pre-solved in joint space (it is short in Cartesian
-                    # terms -- the branch switch, not the wrist move, causes the
-                    # jump) and prepended as a convergence segment.
-                    jump = float(np.max(np.abs(transfer_path[0] - joints["lift"])))
-                    if jump > C.MAX_SEED_JUMP_RAD:
-                        blend = self.blend_transfer_segments(joints["lift"], transfer_path[0])
-                        if blend is None:
-                            seed_errors.append(f"first transfer waypoint jumps {jump:.2f}rad from the lift pose and no clear joint blend exists")
+        # Second pass only when the two reference seeds carry nowhere: a fixed bank of
+        # seeds over the joint ranges (as for the grasp), since the lift pose's branch
+        # can be unable to reach a set-down the arm reaches on another branch.
+        # The bank pass walks each route backwards from the set-down end (solved from
+        # the bank seed) to the lift: the lift's branch may not reach the set-down,
+        # while the set-down's own branch reaches back to the lift height; the joint
+        # blend below then joins the lift pose onto it (collision-checked).
+        passes = [(transfer_seeds, False)]
+        if self.use_seed_bank:
+            passes.append((tuple(self._seed_bank(C.PLACE_SEED_BANK_SIZE)), True))
+        for transfer_seeds, reverse in passes:
+            if feasible:
+                break
+            for yaw in C.PLACE_YAW_CANDIDATES_DEG:
+                centers_yaw = {**plan.centers, **{
+                    k: v for k, v in self.centers(object_position, yaw, held_offset, place_floor).items()
+                    if k in ("transfer", "lower")
+                }}
+                for strategy, route in self.transfer_route_candidates(lift_center, centers_yaw["transfer"]):
+                    solved, seed_errors = None, []
+                    for transfer_seed in transfer_seeds:
+                        try:
+                            if reverse:
+                                transfer_path = self._reverse_route_walk(route, yaw, transfer_seed)
+                                seed = transfer_path[-1]
+                            else:
+                                transfer_path, seed = [], transfer_seed
+                                for segment_index, (start, end) in enumerate(zip(route, route[1:])):
+                                    segment = self._walk(start, end, seed, C.CARRY_PATH_STEPS,
+                                        orientation_at=lambda f, yaw=yaw, first=segment_index == 0:
+                                            rotation_z(yaw * f if first else yaw) @ self.orientation)
+                                    transfer_path.extend(segment)
+                                    seed = segment[-1]
+                            lower_path = self._walk(centers_yaw["transfer"], centers_yaw["lower"], seed, C.CARRY_PATH_STEPS,
+                                orientation_at=lambda f, yaw=yaw: rotation_z(yaw) @ self.orientation)
+                        except RuntimeError as error:
+                            seed_errors.append(str(error).splitlines()[0])
                             continue
-                        transfer_path = blend + transfer_path
-                    hits = self.hand_contacts(lower_path[-1], self.scene.basket_geoms)
-                    margin = min(self.joint_margin_degrees(q) for q in (*transfer_path, *lower_path))
-                    if hits or margin < C.MIN_JOINT_MARGIN_DEG:
-                        seed_errors.append(f"collision or joint margin {margin:.1f}deg")
+                        # A walk can complete on a pinched branch the margin test then
+                        # rejects; the next seed may carry the same route through with
+                        # room to spare, so acceptance is checked per seed here. The
+                        # accepted path must also START from where the arm really is:
+                        # a whole-path seed whose first waypoint jumps in joint space
+                        # (measured 1.25 rad lift->wp0 on the centreline layout) makes
+                        # the follower teleport the arm and shake the can loose -- the
+                        # carry then fails "transfer too low" in physics even though
+                        # every waypoint validated. The same-jump problem is fixed, not
+                        # just rejected: the blend from the lift pose to that first
+                        # waypoint is pre-solved in joint space (it is short in Cartesian
+                        # terms -- the branch switch, not the wrist move, causes the
+                        # jump) and prepended as a convergence segment.
+                        jump = float(np.max(np.abs(transfer_path[0] - joints["lift"])))
+                        if jump > C.MAX_SEED_JUMP_RAD:
+                            blend = self.blend_transfer_segments(joints["lift"], transfer_path[0])
+                            if blend is None:
+                                seed_errors.append(f"first transfer waypoint jumps {jump:.2f}rad from the lift pose and no clear joint blend exists")
+                                continue
+                            transfer_path = blend + transfer_path
+                        hits = self.hand_contacts(lower_path[-1], self.scene.basket_geoms)
+                        margin = min(self.joint_margin_degrees(q) for q in (*transfer_path, *lower_path))
+                        if hits or margin < C.MIN_JOINT_MARGIN_DEG:
+                            seed_errors.append(f"collision or joint margin {margin:.1f}deg")
+                            continue
+                        solved = (transfer_path, lower_path)
+                        break
+                    if solved is None:
+                        failures.append(f"yaw {yaw:+.0f} {strategy}: {seed_errors[-1]}")
                         continue
-                    solved = (transfer_path, lower_path)
-                    break
-                if solved is None:
-                    failures.append(f"yaw {yaw:+.0f} {strategy}: {seed_errors[-1]}")
-                    continue
-                transfer_path, lower_path = solved
-                margin = min(self.joint_margin_degrees(q) for q in (*transfer_path, *lower_path))
-                length = sum(float(np.linalg.norm(b - a)) for a, b in zip(route, route[1:]))
-                feasible.append((length + 0.01 / margin, -margin, yaw, strategy, centers_yaw, transfer_path, lower_path))
+                    transfer_path, lower_path = solved
+                    margin = min(self.joint_margin_degrees(q) for q in (*transfer_path, *lower_path))
+                    length = sum(float(np.linalg.norm(b - a)) for a, b in zip(route, route[1:]))
+                    feasible.append((length + 0.01 / margin, -margin, yaw, strategy, centers_yaw, transfer_path, lower_path))
         if feasible:
             _, _, yaw, strategy, centers_yaw, transfer_path, lower_path = min(feasible, key=lambda item: item[:2])
             joints["transfer"], joints["lower"] = transfer_path[-1], lower_path[-1]
@@ -571,6 +598,24 @@ class GraspPlanner:
             self.validate(plan)
             return plan
         raise RuntimeError("no reachable transfer/set-down pose at any hand yaw:\n  " + "\n  ".join(failures))
+
+    def _reverse_route_walk(self, route: list[np.ndarray], yaw: float, seed: np.ndarray) -> list[np.ndarray]:
+        """Forward-ordered carry waypoints for `route`, solved end-first from `seed`.
+        Same waypoints and hand headings as the forward walk in plan_place (the first
+        segment turns the hand by `yaw`, the rest hold it)."""
+        end_orientation = rotation_z(yaw) @ self.orientation
+        seed = solve_pose_ik(self.model, self.side, route[-1], end_orientation, seed)
+        backwards = [seed]
+        segments = list(enumerate(zip(route, route[1:])))
+        for segment_index, (start, end) in reversed(segments):
+            first = segment_index == 0
+            # Walking end -> start: fraction f from the end is (1 - f) along the segment.
+            points = self._walk(end, start, backwards[-1], C.CARRY_PATH_STEPS,
+                orientation_at=lambda f, first=first: rotation_z(yaw * (1.0 - f) if first else yaw) @ self.orientation)
+            backwards.extend(points)
+        # backwards runs route[-1] ... route[0] (the lift itself last); drop the lift
+        # point so the path starts one step out, as the forward walk does.
+        return list(reversed(backwards[:-1]))
 
     @staticmethod
     def transfer_route_candidates(start: np.ndarray, target: np.ndarray) -> list[tuple[str, list[np.ndarray]]]:

@@ -108,9 +108,13 @@ class Executor:
         # MAX_JOINT_SPEED_RAD_S on average. Without it a 0.18rad waypoint step in a
         # 0.09s slot flung a held can out of the hand (7cm wrist jump in 0.15s at the
         # start of a carry, 2026-09-23) -- and it caps the DM motors' commanded speed.
+        # Arm joints only: the hand's own open/close timing is part of the tuned
+        # release (fingers uncurl while the wrist retreats; slowing them to the arm's
+        # cap shoved the can 14mm on release).
+        arms = [group for group in groups if group.endswith("_arm")]
         durations = [
             max(float(duration), max(
-                float(np.max(np.abs(paths[group][index + 1] - paths[group][index]))) for group in groups
+                (float(np.max(np.abs(paths[group][index + 1] - paths[group][index]))) for group in arms), default=0.0
             ) / C.MAX_JOINT_SPEED_RAD_S)
             for index, duration in enumerate(durations)
         ]

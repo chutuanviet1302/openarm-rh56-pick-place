@@ -46,6 +46,8 @@ GRASP_SEED_BANK_RNG = 0
 GRASP_SEED_BANK_ITERATIONS = 400
 GRASP_SEED_DUPLICATE_RAD = 0.05
 GRASP_CHAIN_ATTEMPTS = 6
+# Transfer seeds tried (GraspPlanner.plan_place) when the two reference seeds fail.
+PLACE_SEED_BANK_SIZE = 12
 MIN_FLOOR_CLEARANCE = 0.005
 # Attention stance ("nghiem"): both arms hanging at the sides, fists closed, fingers
 # down, palms facing the body; the left arm mirrors the right (see Scene.attention_pose).
@@ -226,7 +228,7 @@ MOVE_TO_GRASP = 1.0
 PROOF_LIFT_SECONDS = 0.8
 MOVE_TO_LIFT = 1.8
 TRANSFER_SECONDS = 2.5
-# Average joint speed cap for waypoint following (Executor.follow), arm and hand.
+# Average arm joint speed cap for waypoint following (Executor.follow).
 MAX_JOINT_SPEED_RAD_S = 0.6
 LOWER_SECONDS = 1.2
 ALL_FINGERS = ("index", "middle", "ring", "pinky", "thumb")

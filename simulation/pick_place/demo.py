@@ -155,6 +155,29 @@ class Demo:
             f"(error vs ground truth {self.perception_error_m*1000:.1f}mm)"
         )
 
+    def resolve_lift_from_here(self) -> None:
+        """Re-solve the lift pose from the arm's current joints (after the proof lift).
+
+        The 7-DOF arm reaches the planned lift wrist pose with a whole family of elbow
+        positions; the plan's lift came off the *planned* grasp, the arm now sits at
+        the *executed* one. The two landed 0.40rad apart (joint4 23deg, 2026-09-24,
+        perception layout) and the joint-space move between them swung the hand and
+        dropped the can. Seeding from here keeps the elbow where it is. The carry is
+        re-planned from this lift pose right after (plan_place seeds from it). Not for
+        a twist-lift plan, whose lift pose is the end of its own turning path."""
+        from simulation.pick_place.kinematics import solve_pose_ik
+
+        plan, scene, side = self.plan, self.scene, self.side
+        if plan.lift_twist_deg:
+            return
+        here = self.data.ctrl[scene.arm_actuators[side]].copy()
+        try:
+            lift = solve_pose_ik(self.model, side, plan.centers["lift"], self.planner.orientation, here)
+        except RuntimeError:
+            return  # keep the planned lift pose
+        if self.planner.joint_margin_degrees(lift) >= C.MIN_JOINT_MARGIN_DEG:
+            plan.joints["lift"] = lift
+
     def place_floor(self) -> np.ndarray | None:
         return None if self.place_offset is None else self.scene.basket_floor() + self.place_offset
 
@@ -251,6 +274,7 @@ class Demo:
         ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
         arm = f"{side}_arm"
         from simulation.pick_place.kinematics import rotation_z, solve_pose_ik
+        self.resolve_lift_from_here()
         ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
         clearance = self._check_carry_clearance("lift")
         # Re-plan the set-down from where the object actually sits in the hand: the
