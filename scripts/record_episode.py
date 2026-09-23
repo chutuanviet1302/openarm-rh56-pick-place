@@ -178,8 +178,13 @@ def record_retrieve(args: argparse.Namespace) -> Path:
     out_dir = EPISODES_ROOT / name
     out_dir.mkdir(parents=True, exist_ok=True)
     side = args.arm if args.arm != "auto" else "left"
+    place_side = args.place_arm or side
 
-    place_in = Demo(pick_position=tuple(args.object), basket_position=tuple(args.basket), perception=args.perception, side=side)
+    scene = Scene(
+        tuple(args.object), tuple(args.basket),
+        arm_half_separation=args.arm_half_separation, left_arm_mount_yaw_deg=args.left_mount_yaw,
+    )
+    place_in = Demo(perception=args.perception, side=place_side, scene=scene)
     place_in.scene.reset()
     cameras = tuple(camera for camera in args.cameras if _has_camera(place_in.model, camera))
     recorder = Recorder(place_in, cameras, args.fps, out_dir)
@@ -225,7 +230,8 @@ def record_retrieve(args: argparse.Namespace) -> Path:
         "recorded_at": datetime.now().isoformat(timespec="seconds"),
         "layout": {
             "object": list(args.object), "basket": list(args.basket), "retrieve_to": list(retrieve_to),
-            "perception": args.perception, "arm": side, "mode": "retrieve",
+            "perception": args.perception, "arm": side, "place_arm": place_side, "mode": "retrieve",
+            "arm_half_separation": args.arm_half_separation, "left_mount_yaw_deg": args.left_mount_yaw,
         },
         "fps": args.fps,
         "frames": recorder.frames,
@@ -285,6 +291,12 @@ def main() -> None:
     parser.add_argument("--retrieve-to", type=float, nargs=2, metavar=("X", "Y"), default=None,
                         help="record a retrieve episode instead: place at --basket, then grasp back out and "
                              "set down here (simulation.pick_place.retrieve.RetrieveDemo)")
+    parser.add_argument("--place-arm", choices=("right", "left"), default=None,
+                        help="retrieve mode: arm that places into the basket (default: same as --arm)")
+    parser.add_argument("--arm-half-separation", type=float, default=None,
+                        help="simulation fixture: distance from torso centre to each arm root (m)")
+    parser.add_argument("--left-mount-yaw", type=float, default=None,
+                        help="simulation fixture: turn the left arm mount about the vertical (deg)")
     parser.add_argument("--perception", action="store_true", help="object position from the head camera (RGB-D)")
     parser.add_argument("--arm", choices=("auto", "right", "left"), default="auto")
     parser.add_argument("--name", help="episode folder name (default: timestamp)")

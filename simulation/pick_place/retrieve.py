@@ -19,6 +19,7 @@ from simulation.pick_place import config as C
 from simulation.pick_place.demo import Demo, run_trial
 from simulation.pick_place.episode import TrialResult
 from simulation.pick_place.kinematics import rotation_z, upright_tilt_degrees
+from simulation.pick_place.scene import Scene
 
 RETRIEVE_PHASES = ("perceive", "plan", "ready", "reach", "grasp", "carry", "release")
 
@@ -132,9 +133,11 @@ def run_retrieve(demo: Demo, retrieve_to: tuple[float, float], viewer=None, stop
 
 
 class RetrieveDemo:
-    """`place_in`: an ordinary single-arm Demo that puts the object in the basket
-    at `basket_position`. `retrieve`: built only once `place_in` has actually run,
-    from its live scene, so the grasp is against the object where it really is."""
+    """`place_in`: an ordinary single-arm Demo (arm `place_side`) that puts the
+    object in the basket at `basket_position`. `retrieve`: built only once
+    `place_in` has actually run, from its live scene, so the grasp -- by arm
+    `side`, which may be the other one -- is against the object where it really is.
+    `place_side` defaults to `side` (one arm does both legs)."""
 
     def __init__(
         self,
@@ -143,6 +146,9 @@ class RetrieveDemo:
         retrieve_to: tuple[float, float],
         *,
         side: str = "left",
+        place_side: str | None = None,
+        left_arm_mount_yaw_deg: float | None = None,
+        arm_half_separation: float | None = None,
         perception: bool = False,
         verbose: bool = False,
     ) -> None:
@@ -150,9 +156,15 @@ class RetrieveDemo:
         self.basket_position = tuple(float(v) for v in basket_position)
         self.retrieve_to = tuple(float(v) for v in retrieve_to)
         self.side = side
+        self.place_side = place_side or side
+        self.left_arm_mount_yaw_deg = left_arm_mount_yaw_deg
         self.perception = perception
         self.verbose = verbose
-        self.place_in = Demo(self.pick_position, self.basket_position, perception=perception, verbose=verbose, side=side)
+        scene = Scene(
+            self.pick_position, self.basket_position,
+            arm_half_separation=arm_half_separation, left_arm_mount_yaw_deg=left_arm_mount_yaw_deg,
+        )
+        self.place_in = Demo(perception=perception, verbose=verbose, side=self.place_side, scene=scene)
         self.retrieve: Demo | None = None
 
     def run(self, viewer=None, stop_after: str | None = None) -> None:
@@ -218,7 +230,7 @@ def run_retrieve_trial(task: RetrieveDemo, viewer=None, stop_after: str | None =
         phase_observations=demo.log.observations,
         route="RETRIEVE_FROM_BASKET",
         route_reason="grasp back out of the basket the object was just placed in, set down on bare table",
-        source_arm=task.side,
+        source_arm=task.place_side,
         target_arm=task.side,
         min_joint_margin_deg=values.get("min_joint_margin_deg"),
         max_penetration_m=demo.executor.max_penetration_m,

@@ -157,7 +157,7 @@ def _camera_quat(eye: np.ndarray, target: np.ndarray, up: np.ndarray = np.array(
 
 def build_five_finger_spec(
     *, pick_bottle: bool = False, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B,
-    arm_half_separation: float | None = None,
+    arm_half_separation: float | None = None, left_arm_mount_yaw_deg: float | None = None,
 ) -> mujoco.MjSpec:
     if not INSPIRE_ROOT.is_dir():
         raise FileNotFoundError("Inspire RH56DFX assets missing; clone correlllab/rh56_controller with h1_mujoco")
@@ -170,6 +170,19 @@ def build_five_finger_spec(
         # default keeps OpenArm v1 geometry; handoff experiments opt in explicitly.
         arm.body("openarm_left_link0").pos[1] = arm_half_separation
         arm.body("openarm_right_link0").pos[1] = -arm_half_separation
+    if left_arm_mount_yaw_deg:
+        # Simulation fixture only, opt-in: turn the left arm's mount about the
+        # vertical so its grasp region -- which sits well outboard of its shoulder --
+        # swings in toward the table centre and overlaps what the right arm can
+        # place into (right places into a basket, left takes it back out). Link
+        # lengths, joint ranges and the grasp posture are the vendor's; only the
+        # mount heading changes. Not a measured hardware configuration.
+        base = arm.body("openarm_left_link0")
+        half = np.deg2rad(left_arm_mount_yaw_deg) / 2.0
+        turn = np.array([np.cos(half), 0.0, 0.0, np.sin(half)])
+        quat = np.zeros(4)
+        mujoco.mju_mulQuat(quat, turn, np.asarray(base.quat, dtype=float))
+        base.quat = quat
     # The vendor scene's ground plane becomes the room floor; the table stands on it.
     arm.geom("floor").pos = [0.0, 0.0, ROOM_FLOOR_Z]
     table_x = 0.5 * (TABLE_X_RANGE[0] + TABLE_X_RANGE[1])
@@ -398,11 +411,11 @@ def build_five_finger_spec(
 
 def build_five_finger_model(
     *, pick_bottle: bool = False, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B,
-    arm_half_separation: float | None = None,
+    arm_half_separation: float | None = None, left_arm_mount_yaw_deg: float | None = None,
 ) -> mujoco.MjModel:
     model = build_five_finger_spec(
         pick_bottle=pick_bottle, pick_position=pick_position, basket_position=basket_position,
-        arm_half_separation=arm_half_separation,
+        arm_half_separation=arm_half_separation, left_arm_mount_yaw_deg=left_arm_mount_yaw_deg,
     ).compile()
     _stiffen_arm_actuators(model)
     _soften_hand_actuators(model)

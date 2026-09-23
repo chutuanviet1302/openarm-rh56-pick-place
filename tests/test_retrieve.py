@@ -31,6 +31,25 @@ class RetrieveFromBasketTests(unittest.TestCase):
         # finger_contact_forces() here would read back near zero, not the grip.
         self.assertGreaterEqual(result.grasp_forces["thumb"], 6.0)
 
+    def test_right_places_left_retrieves(self):
+        """Cross-arm: the right arm places into the basket, the left arm grasps it
+        back out and sets it down on the table. On the stock mount the two arms'
+        regions don't overlap (right places no further than y~0, left can only
+        grasp well outboard of its shoulder), so this runs on a simulation-only
+        layout: arm roots 0.10m off centre and the left mount turned -120deg about
+        the vertical, swinging its grasp region in over the right arm's side.
+        (With the stock 0.031m separation that turn put left link1 into right
+        link0 and the grasp missed.)"""
+        task = RetrieveDemo(
+            (0.10, -0.35), (0.28, -0.14), (0.12, -0.22), side="left", place_side="right",
+            arm_half_separation=0.10, left_arm_mount_yaw_deg=-120.0,
+        )
+        result = run_retrieve_trial(task)
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertEqual((result.source_arm, result.target_arm), ("right", "left"))
+        self.assertLess(result.placement_error_m, 0.05)
+        self.assertLess(result.bottle_tilt_deg, 15.0)
+
     def test_place_leg_failure_is_not_masked_as_a_retrieve_failure(self):
         """An unreachable pick position must fail in the place-into-basket leg
         with its own reason, not be silently swallowed or blamed on retrieval."""

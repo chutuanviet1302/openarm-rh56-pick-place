@@ -147,6 +147,16 @@ Nguyên nhân của các lần thất bại trước:
 
 Bài học: "gần đường tâm" và "xa 30cm" là hai giới hạn khác nhau, và cả hai đều bị nhầm thành "không nắm được gần tâm" nói chung vì các layout test trước đó luôn kết hợp CẢ hai khó khăn cùng lúc (điểm nhặt cực đoan + khoảng cách xa). Layout dùng một mình từng yếu tố cho thấy y=0.0 tự nó không phải rào cản. Test hồi quy: `tests/test_bimanual_routing.py::test_delivers_object_to_true_centreline_basket`. Lệnh tái tạo: `python -m simulation.pick_place_demo --object 0.10 -0.35 --basket 0.22 0.0`.
 
+### Tay phải đặt vào rổ → tay trái lấy ra (23/09/2026, đã đạt, **bố trí mô phỏng**)
+
+- Trên bố trí gốc không làm được: tay phải chỉ đặt với tới y≈0, còn tay trái chỉ nắm được ở vùng cách vai trái ~0.25–0.40m về phía ngoài (quét 20 vị trí rổ quanh giữa bàn: 0/20). Không phải lỗi hằng số bù hàm kẹp (0.30/0.15/0.0 đều hỏng), không phải giới hạn khớp (đối xứng gương hoàn hảo).
+- Người dùng cho phép đổi bố trí robot. Hai tham số opt-in (mặc định không đổi gì), **chỉ dùng cho mô phỏng, chưa đo trên phần cứng thật**:
+  - `left_arm_mount_yaw_deg` (mới, trong `five_finger_model.build_five_finger_spec` / `Scene`): xoay đế tay trái quanh trục đứng. Vùng nắm của tay trái quay theo quanh vai, về phía tay phải. Chiều dài link, giới hạn khớp và tư thế nắm giữ nguyên.
+  - `arm_half_separation` (đã có): chỉ xoay thôi thì khâu 1 tay trái va vào đế tay phải (2 đế chỉ cách 6.2cm). Khớp 1 kẹt thiếu 25.5° so với kế hoạch, tay trượt vật (lực 5 ngón = 0). Tách 2 đế ra 0.10m thì hết va chạm.
+- Layout đạt: nhặt A=(0.10,-0.35), rổ B=(0.28,-0.14), đặt ra C=(0.12,-0.22), `arm_half_separation=0.10`, `left_arm_mount_yaw_deg=-120`. Physics **PASS**: sai số đặt 27.8mm, nghiêng cuối 7.9° (dưới ngưỡng 15°). Tư thế nắm của tay trái chịu được lệch ±1.5cm của vật trong rổ (5/5), và không va chạm giữa 2 tay tại mọi waypoint.
+- Code: `RetrieveDemo(..., place_side="right", side="left", arm_half_separation=..., left_arm_mount_yaw_deg=...)`. Test: `tests/test_retrieve.py::test_right_places_left_retrieves`. Ghi episode cho web viewer: `python -m scripts.record_episode --object 0.10 -0.35 --basket 0.28 -0.14 --retrieve-to 0.12 -0.22 --arm left --place-arm right --arm-half-separation 0.10 --left-mount-yaw -120` (đã ghi sẵn: `right-to-basket-left-out`).
+- Hạn chế: rổ ở (0.28,-0.14), lệch về phía tay phải chứ không đúng giữa bàn. Chưa kiểm tra planner có tự tránh va chạm tay-tay dọc đường đi hay không (mới chỉ kiểm tra tĩnh tại waypoint + chạy vật lý thật một layout).
+
 ### Phần cứng thật
 
 - Chưa xác nhận giới hạn lực servo OpenArm thật.
