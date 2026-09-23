@@ -51,6 +51,10 @@ class Executor:
             self.max_penetration_m = max(self.max_penetration_m, max(-depth for depth in offenders.values()) / 1000.0)
             detail = ", ".join(f"{body} {depth:.1f}mm" for body, depth in sorted(offenders.items()))
             raise RuntimeError(f"trajectory aborted: {detail} colliding with the basket")
+        offenders = self.scene.robot_body_contacts()
+        if offenders:
+            detail = ", ".join(f"{body} {depth:.1f}mm" for body, depth in sorted(offenders.items()))
+            raise RuntimeError(f"trajectory aborted: {detail} pressing into the robot's pedestal/torso")
         offenders = self.scene.inter_arm_contacts()
         if offenders:
             detail = ", ".join(f"{pair} {depth:.1f}mm" for pair, depth in sorted(offenders.items()))

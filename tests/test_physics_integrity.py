@@ -55,3 +55,30 @@ class PhysicsIntegrityTests(unittest.TestCase):
         model = build_five_finger_model(pick_bottle=True)
         names = {model.equality(index).name for index in range(model.neq)}
         self.assertFalse(names & {"grasp_left_box", "grasp_right_box"})
+
+    def test_attention_stance_is_clear_of_the_robot_and_its_limits(self):
+        """The rest pose every episode starts and ends in must not lean on the robot's
+        own pedestal/torso (the old all-zero pose pressed the RH56 thumb into
+        robot_riser: 9.4Nm on the DM4310 wrist, rated 7Nm) nor sit on a joint limit
+        (joint4 was exactly at 0deg)."""
+        import mujoco
+        import numpy as np
+
+        from simulation.pick_place.scene import Scene
+
+        wrist_limit_nm = 7.0  # DM4310, joints 5-7 (openarm_mujoco v1)
+        for kwargs in ({}, dict(arm_half_separation=0.06, left_arm_mount_yaw_deg=-100.0, right_arm_mount_yaw_deg=40.0,
+                                attention_deg={"left": (20.0, -10.0, 0.0, 10.0, 0.0, 0.0, 0.0)})):
+            scene = Scene((0.26, -0.26), (0.32, -0.02), **kwargs)
+            scene.reset()
+            for _ in range(1500):
+                mujoco.mj_step(scene.model, scene.data)
+            self.assertEqual(scene.robot_body_contacts(), {})
+            for side in ("left", "right"):
+                for index, qpos in enumerate(scene.arm_qpos[side]):
+                    joint = next(j for j in range(scene.model.njnt) if scene.model.jnt_qposadr[j] == qpos)
+                    low, high = scene.model.jnt_range[joint]
+                    margin = np.degrees(min(scene.data.qpos[qpos] - low, high - scene.data.qpos[qpos]))
+                    self.assertGreater(margin, 5.0, f"{side} joint{index + 1} at rest")
+                wrist = np.abs(scene.data.actuator_force[scene.arm_actuators[side]][4:])
+                self.assertLess(wrist.max(), wrist_limit_nm, f"{side} wrist hold torque at rest")

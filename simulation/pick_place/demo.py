@@ -39,6 +39,7 @@ class Demo:
         verbose: bool = False,
         side: str = "right",
         scene: Scene | None = None,
+        place_offset: tuple[float, float] | None = None,
     ) -> None:
         if side not in ("left", "right"):
             raise ValueError("side must be 'left' or 'right'")
@@ -52,6 +53,10 @@ class Demo:
         self.planner = GraspPlanner(self.scene, side)
         self.executor = Executor(self.scene)
         self.executor.active_side = side
+        # Release point relative to the basket centre (xy, metres). The basket stays
+        # where the task puts it; this only moves where inside it the can is set down
+        # (retrieve.py: toward the side the other arm can grasp from).
+        self.place_offset = None if place_offset is None else np.array([*place_offset, 0.0], dtype=float)
         self.log = EpisodeLog(lambda: self.scene.data.time, verbose=verbose)
         # With perception on, the object's position comes from the camera (RGB-D ->
         # deprojection), never from the simulator state; the error against ground truth
@@ -150,8 +155,13 @@ class Demo:
             f"(error vs ground truth {self.perception_error_m*1000:.1f}mm)"
         )
 
+    def place_floor(self) -> np.ndarray | None:
+        return None if self.place_offset is None else self.scene.basket_floor() + self.place_offset
+
     def phase_plan(self) -> None:
-        self.plan = self.planner.plan(self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws))
+        self.plan = self.planner.plan(
+            self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws), place_floor=self.place_floor()
+        )
         self.log.record("grasp_yaw_deg", float(self.plan.grasp_yaw_deg))
         self.log.record("place_yaw_deg", float(self.plan.place_yaw_deg))
         self.log.record("route_strategy", self.plan.route_strategy)
@@ -213,7 +223,8 @@ class Demo:
         self.log.record("grasp_forces", scene.finger_contact_forces(side))
         self.log.note("thumb opposed by at least two fingers -> proof lift")
 
-        rise, tilt, hand_rise = ex.proof_lift(side, self.planner.orientation)
+        grasp_orientation = self.plan.grasp_orientation if self.plan.grasp_orientation is not None else self.planner.orientation
+        rise, tilt, hand_rise = ex.proof_lift(side, grasp_orientation)
         slip = hand_rise - rise
         self.log.record("proof_lift_rise_m", rise)
         self.log.record("proof_lift_hand_rise_m", hand_rise)
@@ -248,7 +259,9 @@ class Demo:
         held = scene.object_position() - scene.wrist_position(side)
         held_at_grasp_orientation = self.planner.orientation @ scene.wrist_rotation(side).T @ held
         try:
-            self.planner.plan_place(plan, self.object_position(), held_offset=held_at_grasp_orientation)
+            self.planner.plan_place(
+                plan, self.object_position(), held_offset=held_at_grasp_orientation, place_floor=self.place_floor()
+            )
             self.log.note(f"object held {np.round(held_at_grasp_orientation, 3).tolist()} from the wrist; set-down re-planned")
         except RuntimeError as error:
             # The nominal collision-checked set-down is still valid. A measured grip

@@ -41,6 +41,14 @@ class Plan:
     place_yaw_deg: float = 0.0
     route_strategy: str = "direct"
     side: str = "right"
+    # Twist-lift (see GraspPlanner._twist_walk): the hand turns this far about the
+    # can's vertical axis between grasp and lift. `grasp_orientation` is the hand at
+    # the grasp itself (the planner's `orientation` is the lifted, turned one).
+    lift_twist_deg: float = 0.0
+    grasp_orientation: np.ndarray | None = None
+    # Hand orientation per phase where it differs from the planner's `orientation`
+    # (twist-lift: the grasp and the part-turned standoff).
+    phase_orientations: dict[str, np.ndarray] = field(default_factory=dict)
 
     def __getitem__(self, phase: str) -> np.ndarray:
         return self.joints[phase]
@@ -248,19 +256,48 @@ class GraspPlanner:
         attention = self.scene.attention_pose[self.side]
         obstacles = self.scene.basket_geoms | {self.scene.object_geom} | self.scene.table_geoms
         failures = []
+        # Same fallback idea as Demo's centring retry (demo.py): a chain seed can sit
+        # in a narrow IK basin even when the target is solvable from the reference
+        # posture. Seeds from both are tried; whichever returns first still passes the
+        # same margin and blend-clearance checks, so the accepted pose is unchanged in
+        # kind -- only more layouts get one. Two guards keep this from widening the
+        # acceptance gate:
+        #   - the fallback seed is only tried when the chain seed's own IK FAILS, not
+        #     when it returned a pinched solution (a 0.0deg-margin raise candidate must
+        #     keep being rejected -- the executable-layout guard in
+        #     tests/test_bimanual_routing.py matches a raise-phase "joint margin only
+        #     0.0deg" failure, and a fresh seed must not rescue it);
+        #   - the grasp itself keeps its single ARM_SEED solve, so a grasp at a joint
+        #     limit is still rejected exactly as before.
+        seeds = (hover_joints, C.ARM_SEED[self.side])
         for extra in np.linspace(C.RAISE_ABOVE_HOVER, 0.0, 5):
             for dx, raw_dy in C.RAISE_XY_OFFSETS:
                 dy = raw_dy if self.side == "right" else -raw_dy
                 center = np.array([hanging[0] + dx, hanging[1] + dy, hover_center[2] + extra])
                 label = f"+{extra*100:.0f}cm ({dx:+.2f},{dy:+.2f})"
-                try:
-                    candidate = solve_pose_ik(self.model, self.side, center, self.orientation, hover_joints)
-                except RuntimeError as error:
-                    failures.append(f"{label}: {error}")
-                    continue
-                margin = self.joint_margin_degrees(candidate)
-                if margin < C.MIN_JOINT_MARGIN_DEG:
-                    failures.append(f"{label}: joint margin only {margin:.1f}deg")
+                candidate = None
+                seed_errors = []
+                for seed_index, seed in enumerate(seeds):
+                    try:
+                        candidate = solve_pose_ik(self.model, self.side, center, self.orientation, seed)
+                    except RuntimeError as error:
+                        seed_errors.append(str(error).splitlines()[0])
+                        continue
+                    margin = self.joint_margin_degrees(candidate)
+                    if margin < C.MIN_JOINT_MARGIN_DEG:
+                        # A pinched solution from this seed is a REAL rejection: the
+                        # next seed may not rescue it (the executable-layout guard in
+                        # tests/test_bimanual_routing.py matches exactly this
+                        # raise-phase "joint margin only 0.0deg" rejection).
+                        if seed_index + 1 < len(seeds):
+                            seed_errors.append(f"joint margin only {margin:.1f}deg; trying reference-posture seed")
+                            candidate = None
+                            continue
+                        candidate = None
+                        break
+                    break
+                if candidate is None:
+                    failures.append(f"{label}: {seed_errors[-1]}")
                     continue
                 blocked = self.blend_contacts(attention, candidate, obstacles) | self.blend_contacts(candidate, hover_joints, obstacles)
                 if blocked:
@@ -269,27 +306,93 @@ class GraspPlanner:
                 return candidate, center
         raise RuntimeError("no clear raise way point:\n    " + "\n    ".join(failures))
 
+    def _grasp_solutions(self, target: np.ndarray) -> list[np.ndarray]:
+        """IK solutions for the grasp pose, in the order they should be tried.
+
+        The two reference seeds come first (reference posture, then the natural
+        straight-wrist posture -- the pair scripts/sweep_reach_map.py maps the grasp
+        zone with), so layouts that already planned keep their exact solution. Then a
+        fixed bank of seeds spread over the joint ranges, best joint margin first:
+        near the table centreline and over a raised basket the reference seeds miss
+        branches that exist -- 80 spread seeds found the left arm's grasp at
+        (0.30, 0.00) 10cm up with an 11deg margin where both reference seeds failed
+        (measured 2026-09-23). Solutions under MIN_JOINT_MARGIN_DEG are dropped.
+        """
+        natural = C.NATURAL_GRASP_JOINTS * (1.0 if self.side == "right" else C.MIRROR_JOINT_SIGNS)
+        found: list[np.ndarray] = []
+
+        def solve(seed: np.ndarray, iterations: int) -> np.ndarray | None:
+            try:
+                q = solve_pose_ik(self.model, self.side, target, self.orientation, seed, max_iterations=iterations)
+            except RuntimeError:
+                return None
+            if self.joint_margin_degrees(q) < C.MIN_JOINT_MARGIN_DEG:
+                return None
+            if any(np.max(np.abs(q - other)) < C.GRASP_SEED_DUPLICATE_RAD for other in found):
+                return None
+            return q
+
+        for seed in (C.ARM_SEED[self.side], natural):
+            q = solve(seed, C.IK_MAX_ITERATIONS)
+            if q is not None:
+                found.append(q)
+        classic = len(found)
+        ids = np.array([self.model.joint(name).id for name in C.ARM_JOINTS[self.side]])
+        lower, upper = self.model.jnt_range[ids].T
+        rng = np.random.default_rng(C.GRASP_SEED_BANK_RNG)
+        bank = []
+        for _ in range(C.GRASP_SEED_BANK_SIZE):
+            q = solve(lower + (upper - lower) * rng.uniform(0.1, 0.9, len(lower)), C.GRASP_SEED_BANK_ITERATIONS)
+            if q is not None:
+                bank.append(q)
+                found.append(q)
+        bank.sort(key=self.joint_margin_degrees, reverse=True)
+        return found[:classic] + bank
+
     def _plan_pick(self, object_position: np.ndarray) -> Plan:
-        centers = self.centers(object_position)
-        joints: dict[str, np.ndarray] = {}
-        # The grasp is the most constrained pose: solve it first from the reference
-        # posture, then walk backwards off it to the standoff and up to the hover.
-        joints["grasp"] = solve_pose_ik(self.model, self.side, centers["grasp"], self.orientation, C.ARM_SEED[self.side])
-        grasp_margin = self.joint_margin_degrees(joints["grasp"])
-        if grasp_margin < C.MIN_JOINT_MARGIN_DEG:
-            raise RuntimeError(f"grasp joint margin only {grasp_margin:.1f}deg")
-        joints["pregrasp"] = self._walk(centers["grasp"], centers["pregrasp"], joints["grasp"], 6)[-1]
-        joints["hover"] = self._walk(centers["pregrasp"], centers["hover"], joints["pregrasp"], 6)[-1]
+        base_centers = self.centers(object_position)
+        base_orientation = self.orientation
+        solutions = self._grasp_solutions(base_centers["grasp"])
+        if not solutions:
+            raise RuntimeError(f"IK failed for {self.side} target {base_centers['grasp'].tolist()}")
+        errors = []
+        for grasp_joints in solutions[: C.GRASP_CHAIN_ATTEMPTS]:
+            self.orientation = base_orientation
+            try:
+                return self._chain_from_grasp(object_position, {k: v.copy() for k, v in base_centers.items()}, grasp_joints)
+            except RuntimeError as error:
+                errors.append(str(error).splitlines()[0])
+        self.orientation = base_orientation
+        raise RuntimeError(f"{len(solutions)} grasp solution(s), none chains: {errors[0]}")
+
+    def _chain_from_grasp(self, object_position: np.ndarray, centers: dict, grasp_joints: np.ndarray) -> Plan:
+        """Standoff, hover, raise and lift walked off one grasp solution (same branch)."""
+        joints: dict[str, np.ndarray] = {"grasp": grasp_joints}
+        grasp_orientation, twist = self.orientation, 0.0
+        self._twist_phase_orientations = {}
+        try:
+            joints["pregrasp"] = self._walk(centers["grasp"], centers["pregrasp"], joints["grasp"], 6)[-1]
+            joints["hover"] = self._walk(centers["pregrasp"], centers["hover"], joints["pregrasp"], 6)[-1]
+        except RuntimeError as straight_error:
+            twisted = self._twist_approach(object_position, centers, joints)
+            if twisted is None:
+                raise straight_error
+            twist = twisted
         # Way point between the attention stance and the hover: the same hand pose
         # lifted straight up above where the hand hangs at attention, so the arm rises
         # first and only then travels over the table (a direct blend from the hanging
         # pose sweeps the fingers through whatever stands between, e.g. the basket).
         joints["raise"], centers["raise"] = self.find_raise(joints["hover"], centers["hover"])
         joints["ready"] = joints["hover"]
-        joints["lift"] = solve_pose_ik(self.model, self.side, centers["lift"], self.orientation, joints["grasp"])
-        # Also checked against the basket: a pick that starts *inside* the basket
-        # (retrieval, simulation/pick_place/retrieve.py) must clear its walls on the
-        # way in. For every other pick the basket sits far away and this is a no-op.
+        if not twist:
+            joints["lift"] = solve_pose_ik(self.model, self.side, centers["lift"], self.orientation, joints["grasp"])
+        for phase in ("pregrasp", "hover", "lift"):
+            margin = self.joint_margin_degrees(joints[phase])
+            if margin < C.MIN_JOINT_MARGIN_DEG:
+                raise RuntimeError(f"{phase} joint margin only {margin:.1f}deg")
+        # Also checked against the basket (and its stand): a pick that starts *inside*
+        # the basket (retrieval, simulation/pick_place/retrieve.py) must clear its
+        # walls on the way in. For every other pick the basket sits far away.
         obstacles = self.scene.table_geoms | self.scene.basket_geoms
         for phase in ("pregrasp", "grasp"):
             hits = self.hand_contacts(joints[phase], obstacles)
@@ -299,7 +402,66 @@ class GraspPlanner:
         if clearance < C.MIN_FLOOR_CLEARANCE:
             raise RuntimeError(f"grasp fingertip floor clearance only {clearance*1000:.1f}mm")
 
-        return Plan(joints, {}, centers, side=self.side)
+        return Plan(joints, {}, centers, side=self.side, lift_twist_deg=twist, grasp_orientation=grasp_orientation,
+            phase_orientations=dict(self._twist_phase_orientations),
+        )
+
+    def _twist_approach(self, object_position: np.ndarray, centers: dict, joints: dict) -> float | None:
+        """Fallback when the straight approach/lift runs an arm into its joint limits.
+
+        On the real OpenArm v1 mount a can near the table centreline sits at the edge
+        of each arm's reach: the left arm can close on it, but lifting at a fixed hand
+        heading drives joint5 into its 90deg stop (or joint6 into 45deg) within a few
+        cm (measured 2026-09-23, can at (0.197, 0.045)). Turning the hand about the
+        can's own vertical axis while rising keeps the can upright and walks the
+        forearm roll back off the stop. The approach is the same path reversed: the
+        open hand comes straight down over the can, untwisting to the grasp heading.
+        Sets joints/centers pregrasp, hover and lift, and `self.orientation` to the
+        lifted heading. Returns the twist in degrees, or None.
+        """
+        grasp_center = centers["grasp"]
+        pivot = np.array([object_position[0], object_position[1], grasp_center[2]])
+        rise = max(float(centers["lift"][2] - grasp_center[2]) + C.TWIST_LIFT_EXTRA_RISE, C.APPROACH_STANDOFF)
+        steps = C.TWIST_LIFT_STEPS
+        obstacles = self.scene.table_geoms | self.scene.basket_geoms
+        base = self.orientation
+        for twist in C.TWIST_LIFT_CANDIDATES_DEG:
+            path, targets, seed = [], [], joints["grasp"]
+            try:
+                for k in range(1, steps + 1):
+                    f = k / steps
+                    turn = rotation_z(twist * f)
+                    target = pivot + turn @ (grasp_center - pivot) + np.array([0.0, 0.0, rise * f])
+                    seed = solve_pose_ik(self.model, self.side, target, turn @ base, seed)
+                    path.append(seed)
+                    targets.append(target)
+            except RuntimeError:
+                continue
+            if min(self.joint_margin_degrees(q) for q in path) < C.MIN_JOINT_MARGIN_DEG:
+                continue
+            if any(self.hand_contacts(q, obstacles) for q in path):
+                continue
+            # Standoff: back off along the fingers as a plain pick does when that still
+            # solves -- straight down over the can, the open index finger lands on its
+            # rim and shoves it (14mm measured). Only otherwise use a point on the
+            # twist path half a standoff above the grasp.
+            self._twist_phase_orientations = {"grasp": base}
+            try:
+                joints["pregrasp"] = self._walk(grasp_center, centers["pregrasp"], joints["grasp"], 12)[-1]
+                if self.joint_margin_degrees(joints["pregrasp"]) < C.MIN_JOINT_MARGIN_DEG:
+                    raise RuntimeError("standoff joint margin")
+                self._twist_phase_orientations["pregrasp"] = base
+            except RuntimeError:
+                index = next(i for i, t in enumerate(targets) if t[2] - grasp_center[2] >= C.APPROACH_STANDOFF * 0.5)
+                joints["pregrasp"], centers["pregrasp"] = path[index], targets[index]
+                self._twist_phase_orientations["pregrasp"] = rotation_z(twist * (index + 1) / steps) @ base
+            joints["lift"], centers["lift"] = path[-1], targets[-1]
+            joints["hover"], centers["hover"] = path[-1], targets[-1]
+            centers["ready"] = targets[-1]
+            self.orientation = rotation_z(twist) @ base
+            return float(twist)
+        self.orientation = base
+        return None
 
     def plan_place(
         self, plan: Plan, object_position: np.ndarray, held_offset: np.ndarray | None = None,
@@ -320,6 +482,17 @@ class GraspPlanner:
         # lifted object, so the grasp-side centres from `centers()` no longer describe
         # the poses already executed; keep the originals and walk from the real lift.
         lift_center = plan.centers["lift"]
+        # The transfer is seeded from the lift pose to stay on the approach's IK
+        # branch. That branch can be unable to fold the elbow across an inner-zone
+        # carry where a second branch solves comfortably: on (0.14, -0.27) ->
+        # (0.31, -0.06) every chained transfer waypoint raised "IK failed" while the
+        # reference straight-wrist posture seeded margins of 3-19 deg on the very
+        # same targets. First seed whose walk completes wins, so layouts that
+        # already planned keep their exact carry path.
+        transfer_seeds = (
+            joints["lift"],
+            C.NATURAL_GRASP_JOINTS if self.side == "right" else C.NATURAL_GRASP_JOINTS * C.MIRROR_JOINT_SIGNS,
+        )
         feasible = []
         for yaw in C.PLACE_YAW_CANDIDATES_DEG:
             centers_yaw = {**plan.centers, **{
@@ -327,24 +500,53 @@ class GraspPlanner:
                 if k in ("transfer", "lower")
             }}
             for strategy, route in self.transfer_route_candidates(lift_center, centers_yaw["transfer"]):
-                try:
-                    transfer_path, seed = [], joints["lift"]
-                    for segment_index, (start, end) in enumerate(zip(route, route[1:])):
-                        segment = self._walk(start, end, seed, C.CARRY_PATH_STEPS,
-                            orientation_at=lambda f, yaw=yaw, first=segment_index == 0:
-                                rotation_z(yaw * f if first else yaw) @ self.orientation)
-                        transfer_path.extend(segment)
-                        seed = segment[-1]
-                    lower_path = self._walk(centers_yaw["transfer"], centers_yaw["lower"], seed, C.CARRY_PATH_STEPS,
-                        orientation_at=lambda f, yaw=yaw: rotation_z(yaw) @ self.orientation)
-                except RuntimeError as error:
-                    failures.append(f"yaw {yaw:+.0f} {strategy}: {error}")
+                solved, seed_errors = None, []
+                for transfer_seed in transfer_seeds:
+                    try:
+                        transfer_path, seed = [], transfer_seed
+                        for segment_index, (start, end) in enumerate(zip(route, route[1:])):
+                            segment = self._walk(start, end, seed, C.CARRY_PATH_STEPS,
+                                orientation_at=lambda f, yaw=yaw, first=segment_index == 0:
+                                    rotation_z(yaw * f if first else yaw) @ self.orientation)
+                            transfer_path.extend(segment)
+                            seed = segment[-1]
+                        lower_path = self._walk(centers_yaw["transfer"], centers_yaw["lower"], seed, C.CARRY_PATH_STEPS,
+                            orientation_at=lambda f, yaw=yaw: rotation_z(yaw) @ self.orientation)
+                    except RuntimeError as error:
+                        seed_errors.append(str(error).splitlines()[0])
+                        continue
+                    # A walk can complete on a pinched branch the margin test then
+                    # rejects; the next seed may carry the same route through with
+                    # room to spare, so acceptance is checked per seed here. The
+                    # accepted path must also START from where the arm really is:
+                    # a whole-path seed whose first waypoint jumps in joint space
+                    # (measured 1.25 rad lift->wp0 on the centreline layout) makes
+                    # the follower teleport the arm and shake the can loose -- the
+                    # carry then fails "transfer too low" in physics even though
+                    # every waypoint validated. The same-jump problem is fixed, not
+                    # just rejected: the blend from the lift pose to that first
+                    # waypoint is pre-solved in joint space (it is short in Cartesian
+                    # terms -- the branch switch, not the wrist move, causes the
+                    # jump) and prepended as a convergence segment.
+                    jump = float(np.max(np.abs(transfer_path[0] - joints["lift"])))
+                    if jump > C.MAX_SEED_JUMP_RAD:
+                        blend = self.blend_transfer_segments(joints["lift"], transfer_path[0])
+                        if blend is None:
+                            seed_errors.append(f"first transfer waypoint jumps {jump:.2f}rad from the lift pose and no clear joint blend exists")
+                            continue
+                        transfer_path = blend + transfer_path
+                    hits = self.hand_contacts(lower_path[-1], self.scene.basket_geoms)
+                    margin = min(self.joint_margin_degrees(q) for q in (*transfer_path, *lower_path))
+                    if hits or margin < C.MIN_JOINT_MARGIN_DEG:
+                        seed_errors.append(f"collision or joint margin {margin:.1f}deg")
+                        continue
+                    solved = (transfer_path, lower_path)
+                    break
+                if solved is None:
+                    failures.append(f"yaw {yaw:+.0f} {strategy}: {seed_errors[-1]}")
                     continue
-                hits = self.hand_contacts(lower_path[-1], self.scene.basket_geoms)
+                transfer_path, lower_path = solved
                 margin = min(self.joint_margin_degrees(q) for q in (*transfer_path, *lower_path))
-                if hits or margin < C.MIN_JOINT_MARGIN_DEG:
-                    failures.append(f"yaw {yaw:+.0f} {strategy}: collision or joint margin {margin:.1f}deg")
-                    continue
                 length = sum(float(np.linalg.norm(b - a)) for a, b in zip(route, route[1:]))
                 feasible.append((length + 0.01 / margin, -margin, yaw, strategy, centers_yaw, transfer_path, lower_path))
         if feasible:
@@ -390,11 +592,10 @@ class GraspPlanner:
             if np.any(values < lower) or np.any(values > upper):
                 raise RuntimeError(f"{phase} joint target exceeds OpenArm v1 limits")
             reached, rotation = wrist_frame(self.model, self.side, values)
-            desired_rotation = (
-                rotation_z(plan.place_yaw_deg) @ self.orientation
-                if phase in ("transfer", "lower")
-                else self.orientation
-            )
+            if phase in ("transfer", "lower"):
+                desired_rotation = rotation_z(plan.place_yaw_deg) @ self.orientation
+            else:
+                desired_rotation = plan.phase_orientations.get(phase, self.orientation)
             position_error = float(np.linalg.norm(reached - plan.centers[phase]))
             rotation_error = float(np.linalg.norm(orientation_error(rotation, desired_rotation)))
             if position_error > C.IK_POSITION_TOLERANCE or rotation_error > C.IK_ROTATION_TOLERANCE:
@@ -452,6 +653,29 @@ class GraspPlanner:
             if hits:
                 return hits  # the first blocked sample is reason enough to reject the blend
         return set()
+
+    def blend_transfer_segments(self, start_joints: np.ndarray, first_waypoint: np.ndarray, samples: int = 12) -> list[np.ndarray] | None:
+        """Joint-space blend from the lift pose to an alternate-branch transfer start,
+        as a list of intermediate joint targets the executor can `follow` segment by
+        segment. The blend is only offered when it is short in Cartesian terms (the
+        wrist barely moves across an IK branch switch) and stays collision-free with
+        PATH_CLEARANCE of room; otherwise None, and the seed is rejected as before."""
+        start_pos, _ = wrist_frame(self.model, self.side, start_joints)
+        end_pos, _ = wrist_frame(self.model, self.side, first_waypoint)
+        if float(np.linalg.norm(end_pos - start_pos)) > C.BRANCH_BLEND_MAX_CARTESIAN_M:
+            return None
+        obstacles = self.scene.table_geoms | self.scene.basket_geoms
+        for fraction in np.linspace(0.0, 1.0, samples + 1)[1:]:
+            joints = start_joints + (first_waypoint - start_joints) * fraction
+            margin = self.joint_margin_degrees(joints)
+            if margin < C.MIN_JOINT_MARGIN_DEG:
+                return None
+            if self.blend_contacts(start_joints + (first_waypoint - start_joints) * (fraction - 1.0 / samples), joints, obstacles):
+                return None
+        return [
+            start_joints + (first_waypoint - start_joints) * f
+            for f in np.linspace(0.0, 1.0, samples + 1)[1:-1]
+        ]
 
     def fingertip_floor_clearance(self, arm_joints: np.ndarray) -> float:
         data = self._pregrasp_data(arm_joints)

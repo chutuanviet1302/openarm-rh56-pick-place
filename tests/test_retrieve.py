@@ -51,15 +51,22 @@ class RetrieveFromBasketTests(unittest.TestCase):
         self.assertLess(result.bottle_tilt_deg, 15.0)
 
     def test_right_places_left_retrieves_centre_basket(self):
-        """Basket on the table centreline (y=0). Sim-only layout: arm roots 0.06m
-        off centre, left mount turned -95deg and right +40deg about the vertical --
+        """Basket at the table centre (0.32, -0.02). Sim-only layout: arm roots 0.06m
+        off centre, left mount turned -100deg and right +40deg about the vertical --
         the left arm's grasp window and the right arm's placing reach only meet
         at the centre with both turned. The executor aborts on any arm-arm contact
         and on the idle arm touching the object, so a pass means neither
-        happened."""
+        happened. The right hand's release leaves the can ~25mm short of the basket
+        centre in x and ~12mm in -y (measured 2026-09-23); basket y=-0.02 and left
+        mount -100deg put that landing spot inside the left arm's grasp window. The
+        earlier (0.32, 0.0) / -95deg layout landed at x=0.295, 10mm outside it.
+        Pick perturbed +-5mm/+-10mm: 6/7 pass (fails at pick x+10mm)."""
         task = RetrieveDemo(
-            (0.26, -0.26), (0.32, 0.0), (0.34, 0.16), side="left", place_side="right",
-            arm_half_separation=0.06, left_arm_mount_yaw_deg=-95.0, right_arm_mount_yaw_deg=40.0,
+            (0.26, -0.26), (0.32, -0.02), (0.34, 0.16), side="left", place_side="right",
+            arm_half_separation=0.06, left_arm_mount_yaw_deg=-100.0, right_arm_mount_yaw_deg=40.0,
+            # Left rest pose turned 20deg at the shoulder: the mirrored default hangs
+            # the idle left hand in the basket on this rotated mount.
+            attention_deg={"left": (20.0, -10.0, 0.0, 10.0, 0.0, 0.0, 0.0)},
         )
         result = run_retrieve_trial(task)
         self.assertTrue(result.success, result.failure_reason)

@@ -150,6 +150,9 @@ class RetrieveDemo:
         left_arm_mount_yaw_deg: float | None = None,
         right_arm_mount_yaw_deg: float | None = None,
         arm_half_separation: float | None = None,
+        attention_deg: dict | None = None,
+        place_offset: tuple[float, float] | None = None,
+        basket_stand_height: float = 0.0,
         perception: bool = False,
         verbose: bool = False,
     ) -> None:
@@ -164,9 +167,10 @@ class RetrieveDemo:
         scene = Scene(
             self.pick_position, self.basket_position,
             arm_half_separation=arm_half_separation, left_arm_mount_yaw_deg=left_arm_mount_yaw_deg,
-            right_arm_mount_yaw_deg=right_arm_mount_yaw_deg,
+            right_arm_mount_yaw_deg=right_arm_mount_yaw_deg, attention_deg=attention_deg,
+            basket_stand_height=basket_stand_height,
         )
-        self.place_in = Demo(perception=perception, verbose=verbose, side=self.place_side, scene=scene)
+        self.place_in = Demo(perception=perception, verbose=verbose, side=self.place_side, scene=scene, place_offset=place_offset)
         self.retrieve: Demo | None = None
 
     def run(self, viewer=None, stop_after: str | None = None) -> None:

@@ -8,6 +8,7 @@ from simulation.five_finger_model import (
     TABLE_TOP_Z,
     HAND_PREFIX,
     ROBOT_RISER_HEIGHT,
+    SHOULDER_AXIS_Z,
     build_five_finger_model,
 )
 from simulation.pick_place_demo import Demo
@@ -171,7 +172,9 @@ class MujocoSmokeTests(unittest.TestCase):
         demo = Demo()
         for side, inward in (("left", -1.0), ("right", +1.0)):
             base = demo.data.xpos[demo.model.body(f"inspire_{side}_base").id]
-            self.assertLess(abs(base[0]), 0.03)
+            # joint1 -20 / joint4 +40 at rest (config.ATTENTION_RIGHT) keeps the hand
+            # ~3.7cm forward of the shoulder line.
+            self.assertLess(abs(base[0]), 0.08)
             mat = demo.data.xmat[demo.model.body(f"inspire_{side}_base").id].reshape(3, 3)
             self.assertLess(mat[2, 2], -0.9, "fingers point down (-z)")
             self.assertGreater(inward * mat[1, 0], 0.9, "palm faces the body")
@@ -179,7 +182,7 @@ class MujocoSmokeTests(unittest.TestCase):
                 demo.data.geom_xpos[g, 2] - (demo.model.geom_size[g, 2] if demo.model.geom_type[g] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_CYLINDER) else demo.model.geom_size[g, 0])
                 for g in range(demo.model.ngeom) if f"inspire_{side}" in (demo.model.body(demo.model.geom_bodyid[g]).name or "")
             )
-            self.assertGreaterEqual(min_z - TABLE_TOP_Z, 0.03)  # fingertips hang 3.6cm over the top
+            self.assertGreaterEqual(min_z - TABLE_TOP_Z, 0.03)  # fingertips hang 4.0cm over the top
 
     def test_robot_riser_bottle_and_basket_are_on_the_table(self):
         model = build_five_finger_model(pick_bottle=True)
@@ -199,7 +202,8 @@ class MujocoSmokeTests(unittest.TestCase):
         self.assertAlmostEqual(float(riser_center[2] + riser.size[2]), ROBOT_RISER_HEIGHT, places=3)
         data = mujoco.MjData(model)
         mujoco.mj_forward(model, data)
-        self.assertAlmostEqual(float(data.xpos[model.body("openarm_left_link0").id][2]), ROBOT_RISER_HEIGHT + 0.698, places=3)
+        self.assertAlmostEqual(float(data.xpos[model.body("openarm_left_link0").id][2]), SHOULDER_AXIS_Z, places=3)
+        self.assertAlmostEqual(SHOULDER_AXIS_Z, 0.78 - 0.083, places=3)
         self.assertAlmostEqual(float(data.xpos[model.body("pick_bottle").id][2]), TABLE_TOP_Z + 0.05, places=3)
         basket = model.geom("place_basket_bottom")
         self.assertAlmostEqual(float(data.geom_xpos[basket.id][2] - basket.size[2]), TABLE_TOP_Z, places=3)
