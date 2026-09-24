@@ -415,3 +415,4 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 **Ảnh "ngón tay xuyên bàn" (người dùng gửi):** đo suốt một lần chạy, ngón tay luôn >= 22 mm trên mặt bàn; vết đen dưới bàn nhiều khả năng là bóng đổ của trình xem, chưa kiểm chứng bằng cách tắt bóng.
 
 **Còn lại / đã thử bỏ:** rổ đáy chữ V (tham số `basket_floor_tilt_deg`, 6/9) — giữ làm tùy chọn, không dùng cho bài chính. Hạ/nâng robot ±10–15 cm không giúp (đoạn mang cần cổ tay z ≈ 0.38 m).
+- **Đã sửa (24/09):** `test_trial_records_full_evidence` (lệch 21.5 mm) — hai lỗi ở bước hạ lon vào rổ: (1) `Executor.descend_until` lấy đích theo cổ tay *đo được* (lệch vài mm do tải) nên cổ tay trôi ngang ~11 mm; giờ theo tư thế *được ra lệnh* (FK của ctrl). (2) `resting_z` trong `Demo` dùng tâm tấm đáy rổ thay vì mặt trên (thiếu 5 mm) nên điều kiện "đã chạm đáy" không bao giờ đạt, tay ép xuống hết 4 cm. **Toàn bộ test: 61/61 OK.**
