@@ -124,7 +124,7 @@ CARRY_CLEARANCE_ABOVE_RIM = 0.05
 # requirement above is what gets checked.
 CARRY_CLEARANCE_MARGIN = 0.01
 # Arm links (2..7) and hand vs the robot's own torso/pedestal, planned clearance.
-ARM_BODY_CLEARANCE = 0.015
+ARM_BODY_CLEARANCE = 0.03  # 15mm planned at a grasp became 0.4mm after the proof lift re-solved the elbow
 LIFT_PATH_STEPS = 8
 # Viewer redraw period while the planner computes (Executor.think).
 VIEWER_THINK_REFRESH_SECONDS = 0.03
@@ -210,6 +210,9 @@ PROOF_LIFT_MAX_TILT_DEG = 15.0
 # step each finger toward closure a little at a time and stop commanding it once it
 # presses hard enough, so it settles ON the surface instead of being driven through it.
 CONTACT_FORCE_TARGET_N = 8.0
+# Re-grip after the proof lift: fingers on the can below this force close again
+# (Demo.phase_grasp); 0 disables it.
+REGRIP_BELOW_N = 5.0
 # Minimum normal force for a finger to count as "pressing" before the lift.
 GRASP_SECURE_MIN_FORCE_N = 0.5
 GRASP_SECURE_MIN_THUMB_FORCE_N = 6.0  # secure grasps measured 9-24N on the thumb

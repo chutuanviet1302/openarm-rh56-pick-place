@@ -435,3 +435,11 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 2. Tay trái đôi khi phải nắm lại lần 2–3; ưu tiên hướng nắm đã thành công (-60°) để giảm thời gian.
 3. Kiểm chứng giả thuyết "ngón tay xuyên bàn" là bóng đổ (tắt bóng trong trình xem).
 4. Chuẩn bị chuyển sang robot thật (ROS 2 / MoveIt) theo lộ trình trong project-scope.
+
+## 24/09/2026 — Nguyên nhân giật (theo yêu cầu mentor, log cho PlotJuggler)
+
+`python -m scripts.log_joint_states` -> `artifacts/joint_logs/*.csv` (mở bằng PlotJuggler, trục thời gian `sim_time`; cột `<tay>/j<i>/cmd|pos|vel|err_deg|torque`, `wall_dt_ms`, `thinking`, `phase`).
+
+- **Do lệnh truyền vào (đã sửa):** `Executor.follow` bắt đầu mỗi đoạn từ vị trí khớp *đo được* thay vì *lệnh hiện tại*; servo trễ 0.3–1° nên lệnh nhảy lùi trong 1 ms -> mômen đổi dấu ~11.6 N·m, 39 lần/lần chạy. Nay cánh tay bắt đầu từ lệnh hiện tại (bàn tay vẫn từ vị trí thật để thả vật đúng). Kết quả: 39 -> 0 đỉnh, vận tốc lệnh max 418 -> 65 °/s, bước mômen max 11.6 -> 0.6 N·m.
+- **Không phải do máy yếu:** vật lý chạy 2.6× thời gian thực (0.77 ms/2 ms mô phỏng, p99 3.5 ms). Chỗ "đứng hình" là planner tính kế hoạch (1–15 s/lần, vật lý dừng) — phím R phát lại không có đoạn dừng.
+- Kèm theo: siết lại ngón < 5 N sau nâng thử (`REGRIP_BELOW_N`); cánh tay cách thân >= 30 mm dọc cả đường mang. Test 61/61, 20 bài ngẫu nhiên 20/20.
