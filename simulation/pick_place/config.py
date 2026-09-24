@@ -39,11 +39,34 @@ MIRROR_JOINT_SIGNS = np.array([-1.0, -1.0, -1.0, 1.0, -1.0, -1.0, -1.0])
 ARM_SEED = {"right": RIGHT_SEED, "left": RIGHT_SEED * MIRROR_JOINT_SIGNS}
 TOP_GRASP_TILT_CANDIDATES_DEG = (20.0, 25.0, 30.0)
 MIN_JOINT_MARGIN_DEG = 3.0
+# Grasp IK seed bank (GraspPlanner._grasp_solutions): fixed-RNG seeds spread over the
+# joint ranges, tried after the two reference seeds; best joint margin first.
+GRASP_SEED_BANK_SIZE = 40
+GRASP_SEED_BANK_RNG = 0
+GRASP_SEED_BANK_ITERATIONS = 400
+GRASP_SEED_DUPLICATE_RAD = 0.05
+GRASP_CHAIN_ATTEMPTS = 6
+# Transfer seeds tried (GraspPlanner.plan_place) when the two reference seeds fail.
+PLACE_SEED_BANK_SIZE = 12
 MIN_FLOOR_CLEARANCE = 0.005
-# Attention stance ("nghiem"): both arms hanging straight at the sides, fists closed,
-# fingers down, palms facing the body. That is the OpenArm v1 zero pose with the hand
-# mounted along the flange axis; the left arm mirrors the right (see Scene.attention_pose).
-ATTENTION_RIGHT = np.zeros(7)
+# Attention stance ("nghiem"): both arms hanging at the sides, fists closed, fingers
+# down, palms facing the body; the left arm mirrors the right (see Scene.attention_pose).
+# Not the OpenArm v1 zero pose: at zero, joint4 sits exactly on its 0deg limit and the
+# RH56 thumb rests on robot_riser -- on the rotated centre-basket mount that contact
+# made the idle left wrist hold 9.4Nm (j6) / 6.9Nm (j7) against the pedestal, over
+# the DM4310's 7Nm. Measured 2026-09-23: joint2 +10deg (arm out from the body) and
+# joint4 +10deg (elbow off its limit) keep the hand >=30mm from riser, torso and table
+# on the vendor mount, every joint >=10deg inside its limits, gravity hold torque
+# ~1-2Nm. More elbow bend (joint4 +20deg) was tried and rejected: the raise way point
+# sits above the hanging hand, and on the rotated centre-basket mount that point left
+# the IK workspace. Layouts whose idle arm would still sit in the other arm's path
+# (or in a basket) override one arm's rest pose via Scene(attention_deg=...).
+# Re-tuned 2026-09-23 after the robot was re-measured 3cm lower (top 0.78m above
+# the table): joint2 +10 / joint4 +10 left the fingertips only 10mm over the table.
+# joint1 -20 (upper arm back) with joint4 +40 (elbow bent) keeps the hand under the
+# shoulder (3.7cm forward) with fingertips 40mm over the table, fingers ~22deg off
+# vertical, and joint4 40deg clear of its limit.
+ATTENTION_RIGHT = np.radians([-20.0, 10.0, 0.0, 40.0, 0.0, 0.0, 0.0])
 
 # --------------------------------------------------------------------------- IK
 IK_MAX_ITERATIONS = 6000
@@ -79,12 +102,20 @@ APPROACH_STANDOFF = 0.08
 HOVER_HEIGHT = 0.08
 # Extra height of the 'raise' way point (above the hanging hand) over the hover.
 RAISE_ABOVE_HOVER = 0.10
+# Fallback raise heights above the hanging hand (GraspPlanner.find_raise).
+RAISE_ABOVE_HANGING = (0.20, 0.15, 0.10)
 # Room the fist must keep from the basket/object/table along the unplanned joint
 # blends (attention <-> raise <-> hover); the executed arm lags the command by a few mm.
 PATH_CLEARANCE = 0.02
 # Horizontal offsets (x, y) of the raise way point from the hanging hand, tried in
-# order at each height: straight up first, then back, outward and inward.
-RAISE_XY_OFFSETS = ((0.0, 0.0), (-0.06, 0.0), (0.0, -0.06), (0.0, 0.06), (-0.06, -0.06), (-0.06, 0.06))
+# order at each height: straight up first, then back, outward and inward. The 12cm
+# outboard entry is a fallback for picks in the inner half of the arm's zone, where
+# every nearer raise candidate sits inside the shoulder's IK basin boundary
+# (e.g. (0.14, -0.27) failed 'no clear raise way point' until this existed; the
+# dy sign is mirrored per arm in planner.find_raise). Appended, not inserted:
+# find_raise returns the FIRST clear candidate, so layouts that already planned
+# keep their exact raise pose.
+RAISE_XY_OFFSETS = ((0.0, 0.0), (-0.06, 0.0), (0.0, -0.06), (0.0, 0.06), (-0.06, -0.06), (-0.06, 0.06), (0.0, -0.12))
 
 # --------------------------------------------------------------------------- carry / place
 # The object's *bottom* must ride at least this far above the basket walls.
@@ -92,6 +123,13 @@ CARRY_CLEARANCE_ABOVE_RIM = 0.05
 # The servos sag under the can's weight, so the plan asks for this much extra; the
 # requirement above is what gets checked.
 CARRY_CLEARANCE_MARGIN = 0.01
+# Arm links (2..7) and hand vs the robot's own torso/pedestal, planned clearance.
+ARM_BODY_CLEARANCE = 0.015
+LIFT_PATH_STEPS = 8
+# Viewer redraw period while the planner computes (Executor.think).
+VIEWER_THINK_REFRESH_SECONDS = 0.03
+OBLIQUE_LIFT_EXTRA = 0.015  # extra lift on the work platform (GraspPlanner.centers)
+ARM_BODY_CLEARANCE_MAX = 0.05
 # Planned height of the object's bottom above the basket floor at the end of the
 # lowering path. From there the hand keeps descending in small steps until the object
 # actually touches the floor (SET_DOWN_*), and only then opens: releasing a can that is
@@ -119,6 +157,13 @@ SET_DOWN_STEP_SECONDS = 0.15
 # candidate whose transfer *and* set-down poses both solve wins.
 # The grasp itself may also turn about the vertical (a round can has no preferred
 # heading); 0 is the reference posture, tried first.
+# Oblique grasp tilts (axis, degrees about world x/y, right arm; x mirrored for the
+# left), tried after every reference heading (GraspPlanner._grasp_tilts).
+GRASP_TILT_CANDIDATES = (("y", -30.0), ("x", -30.0), ("y", -15.0), ("x", 60.0), ("x", 75.0))
+# An oblique grasp must still pinch the can from the side: thumb and finger tips no
+# further apart in height than this (x+60 put the thumb 54mm above the fingers and it
+# closed over the can's top, 2026-09-24; y-30 / x-30 are 6mm).
+MAX_OBLIQUE_JAW_DZ = 0.02
 GRASP_YAW_CANDIDATES_DEG = (0.0, -30.0, 30.0, 15.0, -15.0, -60.0, 60.0, -90.0, 90.0)
 # How many physically rejected grasps (finger not pressing, proof lift failed) the
 # episode lets go of and retries with another heading before giving up.
@@ -128,11 +173,31 @@ PLACE_YAW_CANDIDATES_DEG = (0.0, -30.0, 30.0, -60.0, 60.0, -90.0, 90.0, -120.0, 
 # interpolation between only the endpoints let the hand pitch on the way and the can
 # rolled 30 degrees in the grip.
 CARRY_PATH_STEPS = 8
+# An alternate transfer seed may solve the whole route on a different IK branch whose
+# first waypoint is far from the lift pose in joint space; executing that jump swings
+# the arm violently enough to drop the can (measured 1.25 rad on the centreline
+# layout). Such a start is only accepted when a short Cartesian blend can carry the
+# arm across the branch switch safely (the jump is an elbow reconfiguration, not a
+# wrist move); otherwise the seed is rejected.
+MAX_SEED_JUMP_RAD = 0.35
+BRANCH_BLEND_MAX_CARTESIAN_M = 0.06
 TRANSFER_BASE_CLEARANCE = 0.22
 TRANSFER_LONG_PATH_M = 0.45
 
 # --------------------------------------------------------------------------- proof lift
 PROOF_LIFT_HEIGHT = 0.05
+# Retrieval: re-orient the hand so a can held more than this far off vertical is set
+# down level (retrieve.phase_carry_out).
+LEVEL_BEFORE_SET_DOWN_DEG = 2.0
+LEVEL_FRACTIONS = (1.0, 0.7, 0.5, 0.3)
+# Highest gap (can bottom over the basket floor) the hand may let go from when the
+# arm reaches its limit before the can touches down.
+SET_DOWN_MAX_RELEASE_GAP = 0.008
+# Twist-lift fallback (GraspPlanner._twist_approach): hand turn about the can's axis
+# between grasp and lift, tried in this order when the straight lift hits a joint stop.
+TWIST_LIFT_CANDIDATES_DEG = (-30.0, 30.0, -45.0, 45.0, -60.0, 60.0)
+TWIST_LIFT_STEPS = 24
+TWIST_LIFT_EXTRA_RISE = 0.02
 # The hand itself must actually rise this much (servo sag: commanded 5cm -> ~4.2cm) ...
 PROOF_LIFT_MIN_HAND_RISE = 0.03
 # ... and the object may lag the hand by at most this much: "the bottle came with the
@@ -158,6 +223,8 @@ CLOSE_MAX_ITERATIONS = 120
 # slightly before the surfaces interpenetrate.
 TABLE_CONTACT_TOLERANCE = 0.003
 BASKET_CONTACT_TOLERANCE = 0.003  # same graze allowance as the table
+# The robot's own pedestal/torso: no graze allowance, any penetration aborts.
+ROBOT_BODY_CONTACT_TOLERANCE = 0.0
 
 # --------------------------------------------------------------------------- randomization
 # Sampling boxes (table-plane x, y) covering the region the straight-wrist grasp reaches.
@@ -181,6 +248,8 @@ MOVE_TO_GRASP = 1.0
 PROOF_LIFT_SECONDS = 0.8
 MOVE_TO_LIFT = 1.8
 TRANSFER_SECONDS = 2.5
+# Average arm joint speed cap for waypoint following (Executor.follow).
+MAX_JOINT_SPEED_RAD_S = 0.6
 LOWER_SECONDS = 1.2
 ALL_FINGERS = ("index", "middle", "ring", "pinky", "thumb")
 RELAX_GRIP_SECONDS = 0.6  # grip force -> light contact before the fingers open

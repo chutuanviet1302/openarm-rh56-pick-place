@@ -108,10 +108,22 @@ class BimanualRoutingTests(unittest.TestCase):
         self.assertEqual(plan.grasp_yaw_deg, -30.0)
 
     def test_grasp_at_joint_limit_is_not_an_executable_layout(self):
-        scene = Scene((0.11024, -0.29146), (0.24123, -0.17028))
-        with self.assertRaisesRegex(RuntimeError, "grasp joint margin only"):
-            GraspPlanner(scene).plan(scene.object_position())
+        """A grasp at a joint limit must be rejected even when IK solves it, and the
+        failure must say so (not "unreachable"). Earlier versions pinned this to a
+        layout whose only grasp sat at a limit ((0.14, -0.27) at yaw +30, 1.1deg);
+        since the grasp IK seed bank (2026-09-23) that layout has healthy-margin
+        branches too, so the guard is exercised directly instead: with the margin
+        threshold raised past anything an OpenArm pose can meet, every IK solution
+        that exists is below it."""
+        from unittest.mock import patch
 
+        from simulation.pick_place import config as C
+
+        scene = Scene((0.14, -0.27), (0.26, -0.14))
+        planner = GraspPlanner(scene)
+        with patch.object(C, "GRASP_YAW_CANDIDATES_DEG", (0.0,)), patch.object(C, "MIN_JOINT_MARGIN_DEG", 60.0):
+            with self.assertRaisesRegex(RuntimeError, "grasp joint margin only"):
+                planner.plan(scene.object_position())
 
 if __name__ == "__main__":
     unittest.main()

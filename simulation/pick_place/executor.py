@@ -8,6 +8,7 @@ motion with the offending body named.
 
 from __future__ import annotations
 
+import threading
 import time
 
 import mujoco
@@ -51,6 +52,10 @@ class Executor:
             self.max_penetration_m = max(self.max_penetration_m, max(-depth for depth in offenders.values()) / 1000.0)
             detail = ", ".join(f"{body} {depth:.1f}mm" for body, depth in sorted(offenders.items()))
             raise RuntimeError(f"trajectory aborted: {detail} colliding with the basket")
+        offenders = self.scene.robot_body_contacts()
+        if offenders:
+            detail = ", ".join(f"{body} {depth:.1f}mm" for body, depth in sorted(offenders.items()))
+            raise RuntimeError(f"trajectory aborted: {detail} pressing into the robot's pedestal/torso")
         offenders = self.scene.inter_arm_contacts()
         if offenders:
             detail = ", ".join(f"{pair} {depth:.1f}mm" for pair, depth in sorted(offenders.items()))
@@ -84,6 +89,31 @@ class Executor:
             elif ahead < -0.5:
                 self._wall_anchor = now - sim_time  # fell far behind: re-anchor, don't race
 
+    def think(self, fn, *args, **kwargs):
+        """Run a planner call; with a viewer attached, in a worker thread while this
+        thread keeps redrawing, so the window stays live (camera, panels) instead of
+        freezing for the seconds a plan takes. Physics does not advance meanwhile --
+        the planner only reads the scene (it solves IK on its own MjData copies)."""
+        if self.viewer is None:
+            return fn(*args, **kwargs)
+        outcome: dict = {}
+
+        def work() -> None:
+            try:
+                outcome["value"] = fn(*args, **kwargs)
+            except BaseException as error:  # re-raised on this thread below
+                outcome["error"] = error
+
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        while worker.is_alive():
+            if self.viewer.is_running():
+                self.viewer.sync()
+            worker.join(C.VIEWER_THINK_REFRESH_SECONDS)
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
+
     def seconds_to_steps(self, seconds: float) -> int:
         return max(1, int(seconds / self.model.opt.timestep))
 
@@ -100,6 +130,20 @@ class Executor:
         """Follow waypoints with continuous joint velocity and zero-speed endpoints."""
         groups = list(waypoints)
         paths = {group: [self.data.qpos[self.scene.qpos_for(group)].copy(), *waypoints[group]] for group in groups}
+        # Joint speed limit: stretch any segment whose largest joint move would exceed
+        # MAX_JOINT_SPEED_RAD_S on average. Without it a 0.18rad waypoint step in a
+        # 0.09s slot flung a held can out of the hand (7cm wrist jump in 0.15s at the
+        # start of a carry, 2026-09-23) -- and it caps the DM motors' commanded speed.
+        # Arm joints only: the hand's own open/close timing is part of the tuned
+        # release (fingers uncurl while the wrist retreats; slowing them to the arm's
+        # cap shoved the can 14mm on release).
+        arms = [group for group in groups if group.endswith("_arm")]
+        durations = [
+            max(float(duration), max(
+                (float(np.max(np.abs(paths[group][index + 1] - paths[group][index]))) for group in arms), default=0.0
+            ) / C.MAX_JOINT_SPEED_RAD_S)
+            for index, duration in enumerate(durations)
+        ]
         cumulative = np.cumsum([0.0, *durations])
         steps = self.seconds_to_steps(cumulative[-1])
         for index in range(steps):

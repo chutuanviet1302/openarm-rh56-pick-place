@@ -332,3 +332,86 @@ ros2 run openarm_pick_place mujoco_bridge --ros-args -p config_path:=$PWD/config
 1. Sửa tư thế nghỉ để khớp 4 không nằm đúng giới hạn.
 2. Chạy nhiều trial có nhiễu vị trí vật cho layout rổ giữa bàn (hiện mới chạy 1 layout cố định).
 3. Nếu muốn đưa lên robot thật: đo/chế tạo đế tay xoay tương ứng, hoặc tìm chiến lược nắm khác cho vùng giữa bàn thay vì xoay đế.
+
+## Cập nhật 23/09/2026 (chiều): layout rổ giữa bàn không tái tạo được -> chỉnh lại
+- Chạy lại `test_right_places_left_retrieves_centre_basket` (layout rổ (0.32,0.0), đế trái -95°): **FAIL** ở cả HEAD `2aa82e8` sạch lẫn working tree. Tay phải đặt vật xong (không đổi), nhưng vật nằm ở (0.295,-0.012) thay vì (0.308,-0.013) như ghi nhận -> hụt cửa sổ nắm tay trái (x≥0.305) 10mm -> "no reachable grasp".
+- Đo telemetry thả: trước khi mở tay vật ở (0.307,-0.010); lúc tay phải vừa mở ngón vừa rút lên, vật bị kéo lùi thêm 12mm về phía -x.
+- Đã thử và bỏ: nhắm rổ xa hơn (x=0.33: vẫn trượt 14mm, x≥0.335: tay phải không đặt tới); cho tay phải "mở trước rồi rút" như tay trái (kết quả hỗn loạn: tốt ở x=0.33, tệ hơn 52mm ở x=0.32).
+- **Layout mới PASS:** rổ B=(0.32, **-0.02**), `left_arm_mount_yaw_deg=-100` (các tham số khác giữ nguyên). Trình tự: tay phải nắm A=(0.26,-0.26) -> đặt vào rổ -> **thu về tư thế nghỉ** (`phase_release` kết thúc bằng `attention_pose`) -> tay trái nắm vật trong rổ -> đặt ra C=(0.34,0.16). Sai số 24.9mm, nghiêng 0°, xuyên thấu 0mm, không chạm tay-tay (executor tự dừng nếu có).
+- Độ bền (nhiễu điểm nhặt A): 6/7 PASS (±5mm chéo, ±10mm theo y, -10mm theo x); fail khi A lệch +10mm theo x. Vẫn là layout sát rìa vùng với-tới.
+- Lưu ý: submodule `assets/rh56_controller/h1_mujoco/archive/inspire/inspire_left.xml` đang có sửa đổi chưa commit (đảo dấu y các site đầu ngón trái) — không phải nguyên nhân lỗi trên (HEAD với asset gốc fail y hệt), nhưng cần xác nhận ai sửa và có giữ không.
+
+## Kiểm tra cấu hình OpenArm v1 so với vendor (23/09/2026)
+Đối chiếu model đã compile với `openarm_mujoco/v1/openarm_bimanual.xml`:
+- **Đúng:** dải góc 7 khớp cả hai tay khớp vendor (kể cả j1/j2 bất đối xứng trái-phải); ctrlrange = dải khớp; `limited=true`.
+- **Sai lệch:** servo vị trí kp=800/kv=12, lực ±120 cho MỌI khớp; vendor giới hạn theo motor: DM8009 (j1-2) ±40, DM4340 (j3-4) ±27, DM4310 (j5-7) ±7 Nm. Damping/friction cũng khác (vendor 0.4/0.1).
+- Đo task rổ giữa bàn: tay phải nằm trong giới hạn motor (đỉnh 16 Nm ở j1). Tay trái j6/j7 vượt 7 Nm ~50% thời gian (đỉnh j6 35 Nm, j5 22 Nm), j3 đỉnh 25.3/27 Nm.
+- **Nguyên nhân chính:** ở tư thế nghỉ (tất cả khớp = 0), tay trái chạm bệ `robot_riser`; với đế trái −100° lực đè cần j6=9.4 Nm, j7=6.9 Nm giữ liên tục. Executor không bắt được lỗi này (chỉ bắt tay-tay và tay-nghỉ-chạm-vật).
+- Margin khớp tối thiểu: j4 = 0° (tư thế nghỉ nằm đúng giới hạn), j1 trái 3.4°, j5 trái 3.3°.
+- Vận tốc đỉnh 3.9 rad/s (j4). MJCF vendor không có giới hạn vận tốc; `Openarm-ROS2-robot-control/.../safety_config.yaml` ghi max 1.0-2.0 rad/s (file chung, dải khớp trong đó không khớp OpenArm nên chỉ tham khảo).
+
+## Tiến độ 23/09/2026 (chiều) — WIP, nhánh `wip/real-height-centre-basket`
+
+**Robot thật (ảnh + số đo của người dùng):** hai tay buông thẳng hai bên cột giữa, không xoay đế. Đỉnh robot (gồm bệ + tấm đế) 0.78 m, đỉnh camera trên giá xanh 0.88 m so với mặt bàn. Mô phỏng cũ cộng tấm đế 29 mm hai lần (đỉnh 0.809 m) -> đã sửa: vai 0.697 m, camera tâm 0.8675 m (`ROBOT_TOP_ABOVE_TABLE`, `CAMERA_TOP_ABOVE_TABLE` trong `five_finger_model.py`), thêm giá camera (chỉ hiển thị). Robot dùng bàn tay RH56.
+Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG khớp robot thật -> chỉ là thí nghiệm sim.
+
+**Tư thế nghỉ mới:** `ATTENTION_RIGHT = [-20, 10, 0, 40, 0, 0, 0]°` — đầu ngón cách bàn 40 mm, khớp 4 cách giới hạn 40° (cũ: 10 mm sau khi hạ robot). `tests/test_mujoco` 17/17 OK.
+
+**Đo được về tầm với (robot đúng chiều cao):**
+- Vai→cổ tay ~0.436 m + bàn tay ~0.19 m: tay chỉ vừa tới mặt bàn dưới vai. Nắm ngang ở tầm lon trong rổ là bất khả thi (cổ tay không xuống tới z≈0.1 m; 120 hướng ngón gần ngang đều không có IK).
+- Khớp 2 vai chỉ khép vào +10° -> tay trái khó qua đường giữa; khi nâng thẳng thì khớp 5 (90°)/khớp 6 (45°) chạm giới hạn.
+- Nhiều kết luận "không với tới" trước đây là do planner chỉ thử 1–2 seed IK: với 80 seed ngẫu nhiên tay trái nắm được (0.30, 0.0) ở độ cao bệ 0.10 m, margin 11°.
+
+**Code đã thêm (chưa test đầy đủ):**
+- `planner._grasp_solutions`: 2 seed chuẩn + bank 40 seed cố định (RNG 0), thử nối chuỗi từ tối đa 6 nghiệm nắm (`GRASP_SEED_BANK_*`, `GRASP_CHAIN_ATTEMPTS` trong config).
+- Twist-lift (`_twist_approach`): khi nâng thẳng kẹt giới hạn khớp, xoay bàn tay quanh trục lon trong lúc nâng (lon vẫn thẳng đứng).
+- `Demo(place_offset=...)` / `RetrieveDemo(place_offset=...)`: thả lon lệch trong rổ, rổ vẫn ở giữa.
+- `basket_stand_height`: bệ hộp dưới rổ, tính là vật cản như rổ (planner kiểm tra, executor abort khi chạm).
+- `scripts/view_retrieve.py`: mở MuJoCo xem bài tay phải đặt / tay trái lấy.
+
+**Kết quả hiện tại:** planner (chỉ động học) giải được rổ trên bàn ở (0.25, 0) và (0.30, 0) (lon lệch +3 cm), bệ không giúp (cao hơn còn tệ hơn). **Vật lý chưa pass:** (0.30, 0) tay phải không có đường mang tới rổ; (0.25, 0) lon rơi ở (0.229, -0.002) nên chuỗi tay trái không nối được.
+
+**Việc tiếp theo:**
+1. Chạy lại toàn bộ test (lần chạy trước bị ngắt, chưa có tổng kết) — seed bank có thể đổi kết quả các test cũ (lần trước một seed bank đã làm hỏng một test an toàn).
+2. Làm transfer/place của tay phải cũng dùng seed bank; cho retrieve lập kế hoạch lại theo vị trí lon thật sau khi thả.
+3. Khi pass: đo khoảng cách hai tay, margin khớp, độ lún vào bàn/rổ/bệ (yêu cầu: không chạm bàn, không va chạm), rồi mở `python -m scripts.view_retrieve` cho người dùng xem.
+
+## Tiến độ 24/09/2026 — kết luận bài rổ giữa bàn (robot đúng chiều cao)
+
+**Kết luận (báo mentor):** trên robot thật (vai 0.697 m trên mặt bàn, tay + bàn tay ~0.63 m, khớp vai 2 chỉ khép +10°) và với các ràng buộc an toàn (không chạm bàn/rổ/bệ, không lún vật, margin khớp >= 3°, giới hạn tốc độ khớp), **không có vị trí rổ nào để "tay phải đặt vào rổ, tay trái lấy ra" chạy ổn định**:
+- Tay phải đặt lệch trái trong rổ tối đa y ≈ +0.04 m (rổ x 0.25–0.26). Rổ dời sang trái (tâm y 0.05/0.07/0.09, x 0.22–0.28, 6 điểm nắm khác nhau) -> tay phải không đặt được (bàn tay vướng thành rổ phía gần).
+- Tay trái chỉ nắm được lon trong rổ khi y >= ~+0.03 m, chỉ ở hướng nắm -60°. Vùng chung ~1 cm < sai số thả lon (±1.5 cm); lệch 2 mm là kế hoạch đổi từ được sang không.
+- Rổ x = 0.30 m: tay phải không đặt lệch trái được. Kê bệ 5–10 cm: tay trái mất hết nghiệm.
+- Thí nghiệm hạ đế robot 10–30 cm CHƯA có kết luận: tư thế nghỉ và hướng nắm phải chỉnh lại theo độ cao mới rồi mới đo được.
+
+**Đề xuất:** (1) robot đứng trên sàn cạnh bàn như thiết kế OpenArm, hoặc hạ đế (cần thí nghiệm đầy đủ); (2) hoặc đổi nhiệm vụ để mỗi tay làm trong vùng của nó; (3) bài trung chuyển qua điểm giữa (0.08,-0.38)->(0.25,0.25) cũng không ổn định (lon tuột 5/6 lần) -> router từ chối.
+
+**Chạy được, đã kiểm chứng:** cùng một tay (phải) đặt vào rổ rồi lấy ra: nắm (0.08,-0.38) -> rổ (0.25,-0.25) -> đặt (0.15,-0.40): sai số 27 mm, nghiêng 0°, không lún. Xem: `python -m scripts.view_retrieve`.
+
+**Thay đổi an toàn/planner (23–24/09):**
+- Giới hạn tốc độ khớp trung bình 0.6 rad/s trong `Executor.follow` (trước đó một bước 0.18 rad/0.09 s hất văng lon).
+- Thả lon ở khe hở <= 8 mm khi tay đã duỗi hết tầm (lon phải nằm trọn trong rổ).
+- Bộ seed IK cho tư thế nắm (chỉ chạy khi 2 seed chuẩn không nối được chuỗi) và cho đường mang (đi ngược từ tư thế đặt về tư thế nâng).
+- Sửa lỗi: hướng tay đã xoay (twist-lift) còn sót lại làm IK tư thế nắm lệch 45°.
+- Router trung chuyển: điểm trung chuyển phải chịu sai số rơi ±2 cm (lưới 3×3) và không dùng bộ seed.
+- Đã thử rồi bỏ (làm tệ hơn hoặc đo sai): vòng giữ lực nắm (ngón cái đã ở giới hạn hành trình -> lon bị ép bật ra), kiểm tra "bàn tay mở lún vào vật" (loại cả tư thế chạy tốt).
+- Xoá 2 test lấy chéo tay dựa trên đế xoay giả (-95/-100°, +40°): robot thật không có đế xoay.
+- **Còn mở (24/09):** `test_trial_records_full_evidence` (Demo perception, layout mặc định) đặt lệch 21.5 mm > ngưỡng 20 mm. Lon được căn còn 6.9 mm ở độ cao mang nhưng trôi ~13 mm trong đoạn hạ xuống đáy rổ. Hỏng từ khi thêm giới hạn tốc độ khớp (ở e434639 lon còn rơi khi nâng; đã sửa bằng `Demo.resolve_lift_from_here`: giải lại tư thế nâng từ tư thế hiện tại để khuỷu liên tục). Cần tinh chỉnh đoạn hạ; không nới ngưỡng. Toàn bộ test: 59/60 (trước 2 sửa cuối).
+
+## Tiến độ 24/09/2026 (tối) — HOÀN THÀNH bài rổ giữa bàn, chéo tay (bệ 10 cm)
+
+**Yêu cầu:** tay phải nắm lon bỏ vào rổ ở giữa bàn, tay trái lấy ra đặt ra ngoài; an toàn giới hạn khớp, không va chạm. Robot giữ đúng chiều cao thật (đỉnh 0.78 m).
+
+**Giải pháp đã chạy được:**
+- Bệ làm việc hình chữ nhật cao 10 cm (`work_platform_height=0.10`): dài bằng bàn (1.1 m theo y), rộng nửa bàn (0.5 m), x 0.17–0.67 (mép trước cách nắm tay đang nghỉ 4.7 cm — ở x 0.12 nắm tay lấn vào bệ). Lon, rổ (đáy phẳng, (0.28, 0) — giữa, thẳng thân robot) và điểm đặt ra nằm trên bệ.
+- Nắm xiên (planner `_grasp_tilts`, `GRASP_TILT_CANDIDATES`): ngón tay chúc ~38° dưới ngang, ngón cái và các ngón kẹp ngang thân lon (lệch cao <= 20 mm; góc x+60 để ngón cái trượt qua nắp lon -> bị loại). Trên bệ nắm xiên được thử trước; trên mặt bàn giữ nắm từ trên xuống như cũ.
+- Kết quả: layout danh nghĩa pick (0.28,-0.25) -> rổ (0.28,0) -> đặt (0.28,0.25): sai số 3 mm, nghiêng 0°, không lún. Lệch điểm nắm ±1.5 cm: 7/8 pass (hỏng (0.28,-0.235): tay phải cầm không đủ chắc, lon tuột khi mang).
+- Xem: `python -m scripts.view_retrieve --place-arm right --retrieve-arm left --pick 0.28 -0.25 --basket 0.28 0.0 --retrieve-to 0.28 0.25 --platform 0.10`. Test: `tests/test_retrieve.py::test_right_places_left_retrieves_centre_basket_on_platform`.
+
+**An toàn thêm trong đợt này:** khoảng cách cánh tay (khâu 2–7 + bàn tay) tới thân robot >= 15 mm trong planner (`arm_body_clearance`; khâu 5 tay trái từng sượt thân); nâng lon thẳng đứng theo đường Descartes (`Demo.lift_straight_up`) thay vì nội suy khớp; nâng cao thêm 1.5 cm trên bệ để bù lon tụt; lon được dựng thẳng trước khi đặt khi lấy ra (retrieve); điểm nâng tay dự phòng tính theo bàn tay đang buông / hướng tay chuẩn.
+
+**Mượt khi xem MuJoCo:** vật lý chạy 1.27× thời gian thực; giật là do planner tính giữa chừng (tới 32 s/lần). Đã: giảm vòng lặp IK của seed dự phòng trong `find_raise` (6000 -> 400) — cả bài 169 s -> 75 s; planner chạy ở luồng phụ (`Executor.think`) nên cửa sổ vẫn vẽ lại, xoay camera được trong lúc tính.
+
+**Ảnh "ngón tay xuyên bàn" (người dùng gửi):** đo suốt một lần chạy, ngón tay luôn >= 22 mm trên mặt bàn; vết đen dưới bàn nhiều khả năng là bóng đổ của trình xem, chưa kiểm chứng bằng cách tắt bóng.
+
+**Còn lại / đã thử bỏ:** rổ đáy chữ V (tham số `basket_floor_tilt_deg`, 6/9) — giữ làm tùy chọn, không dùng cho bài chính. Hạ/nâng robot ±10–15 cm không giúp (đoạn mang cần cổ tay z ≈ 0.38 m).

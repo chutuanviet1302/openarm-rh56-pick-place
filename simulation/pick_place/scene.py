@@ -7,6 +7,8 @@ steps time; planner.py and executor.py do that on top of it.
 
 from __future__ import annotations
 
+from typing import Sequence
+
 import mujoco
 import numpy as np
 
@@ -22,6 +24,7 @@ from simulation.pick_place.config import (
     ARM_ACTUATORS,
     ARM_JOINTS,
     ATTENTION_RIGHT,
+    ROBOT_BODY_CONTACT_TOLERANCE,
     BASKET_CONTACT_TOLERANCE,
     BOTTLE_JOINT,
     CARRY_CLEARANCE_ABOVE_RIM,
@@ -38,15 +41,24 @@ class Scene:
     def __init__(
         self, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B, *,
         arm_half_separation: float | None = None, left_arm_mount_yaw_deg: float | None = None,
-        right_arm_mount_yaw_deg: float | None = None,
+        right_arm_mount_yaw_deg: float | None = None, basket_stand_height: float = 0.0,
+        basket_floor_tilt_deg: float = 0.0, work_platform_height: float = 0.0,
+        attention_deg: dict[str, Sequence[float]] | None = None,
     ) -> None:
+        """`attention_deg`: optional per-arm rest pose override, {side: 7 joint angles
+        in degrees}; arms not named keep ATTENTION_RIGHT (mirrored for the left)."""
         self.pick_position = tuple(float(v) for v in pick_position)
         self.basket_position = tuple(float(v) for v in basket_position)
         self.model = build_five_finger_model(
             pick_bottle=True, pick_position=self.pick_position, basket_position=self.basket_position,
             arm_half_separation=arm_half_separation, left_arm_mount_yaw_deg=left_arm_mount_yaw_deg,
-            right_arm_mount_yaw_deg=right_arm_mount_yaw_deg,
+            right_arm_mount_yaw_deg=right_arm_mount_yaw_deg, basket_stand_height=basket_stand_height,
+            basket_floor_tilt_deg=basket_floor_tilt_deg, work_platform_height=work_platform_height,
         )
+        # Height of the surface the object is picked from and set down on.
+        self.work_surface_z = float(work_platform_height)
+        self.basket_stand_height = float(basket_stand_height)
+        self.basket_floor_tilt_deg = float(basket_floor_tilt_deg)
         self.data = mujoco.MjData(self.model)
         # The grasp orientation is whatever the hand has when the wrist is straight in
         # the reference posture -- a natural, in-line hand, not a hand-tuned rotation.
@@ -61,13 +73,35 @@ class Scene:
         self.bottle_body = self.model.body("pick_bottle").id
         self.object_geom = self.model.geom(OBJECT_GEOM).id
         self.table_geoms = {self.model.geom("table_top").id}
+        # The work platform is table for every safety check (hand contact aborts).
+        if self.work_surface_z > 0.0:
+            self.table_geoms.add(self.model.geom("work_platform").id)
         self.basket_geoms = {
             self.model.geom(f"place_basket_{name}").id for name in ("bottom", "left", "right", "front", "back")
         }
+        # The stand under a raised basket is an obstacle exactly like the basket: the
+        # planner's hand-contact checks and the executor's abort both cover it.
+        if self.basket_stand_height > 0.0:
+            self.basket_geoms.add(self.model.geom("place_basket_stand").id)
+        # V-floor insert plates (five_finger_model, basket_floor_tilt_deg).
+        self.basket_floor_geoms = {self.model.geom("place_basket_bottom").id}
+        if self.basket_floor_tilt_deg:
+            for name in ("a", "b"):
+                geom = self.model.geom(f"place_basket_slope_{name}").id
+                self.basket_geoms.add(geom)
+                self.basket_floor_geoms.add(geom)
+        # The robot's own support: pedestal and torso. Arm links 0/1 are bolted to
+        # the torso and excluded from these checks (see robot_body_contacts).
+        self.robot_body_geoms = {self.model.geom("robot_riser").id, self.model.geom("openarm_body_link0_collision").id}
         self.ee_site_id = {side: self.model.site(EE_SITE[side]).id for side in ("left", "right")}
         self.palm_body = {side: self.model.body(f"{HAND_PREFIX}{side}_base").id for side in ("left", "right")}
 
         self.attention_pose = {"right": ATTENTION_RIGHT.copy(), "left": ATTENTION_RIGHT * np.array([-1, -1, -1, 1, -1, -1, -1])}
+        for side, degrees in (attention_deg or {}).items():
+            pose = np.radians(np.asarray(degrees, dtype=float))
+            if side not in self.attention_pose or pose.shape != (7,):
+                raise ValueError("attention_deg must map 'left'/'right' to 7 joint angles")
+            self.attention_pose[side] = pose
         self.reset()
 
     # ------------------------------------------------------------------ indexing
@@ -216,6 +250,14 @@ class Scene:
     def object_bottom_z(self) -> float:
         return float(self.object_position()[2]) - 0.5 * self.object_extents()[1]
 
+    def object_on_basket_floor(self) -> bool:
+        """The object touches the basket's floor (the V insert plates count as floor)."""
+        for contact in self.data.contact[: self.data.ncon]:
+            pair = (contact.geom1, contact.geom2)
+            if self.object_geom in pair and (pair[0] in self.basket_floor_geoms or pair[1] in self.basket_floor_geoms):
+                return True
+        return False
+
     def basket_floor(self) -> np.ndarray:
         return np.asarray(self.data.geom_xpos[self.model.geom("place_basket_bottom").id]).copy()
 
@@ -224,6 +266,7 @@ class Scene:
         object_xy = self.object_position()[:2]
         basket_xy = self.basket_floor()[:2]
         limit = BASKET_HALF_WIDTH - OBJECT_RADIUS - tolerance
+
         return bool(np.all(np.abs(object_xy - basket_xy) <= limit))
 
     def basket_rim_z(self) -> float:
@@ -306,6 +349,17 @@ class Scene:
         """Which arm/hand parts are colliding with the basket, and how deep (mm)."""
         return self._penetrations(self.basket_geoms, BASKET_CONTACT_TOLERANCE, ignore={self.object_geom})
 
+    def robot_body_contacts(self) -> dict[str, float]:
+        """Arm/hand parts pressing into the robot's own pedestal or torso (mm). The
+        shoulder links 0/1 are mounted on the torso and always touch it, so they
+        are ignored; anything further out touching it is a collision."""
+        mounts = {f"openarm_{side}_link{i}" for side in ("left", "right") for i in (0, 1)}
+        return {
+            body: depth
+            for body, depth in self._penetrations(self.robot_body_geoms, ROBOT_BODY_CONTACT_TOLERANCE).items()
+            if body not in mounts
+        }
+
     def robot_side(self, geom: int) -> str | None:
         """'left'/'right' for any geom on that arm or hand, None for everything else
         (torso, table, basket, object)."""
@@ -350,6 +404,11 @@ class Scene:
             mujoco.mj_contactForce(self.model, self.data, index, wrench)
             forces[finger] += abs(float(wrench[0]))
         return forces
+
+    def object_on_work_surface(self) -> bool:
+        """The object rests on the table top or the work platform."""
+        names = ["table_top"] + (["work_platform"] if self.work_surface_z > 0.0 else [])
+        return any(self.object_touches(name) for name in names)
 
     def object_touches(self, geom_name: str) -> bool:
         """True while the object's collision geom is in contact with `geom_name`."""
