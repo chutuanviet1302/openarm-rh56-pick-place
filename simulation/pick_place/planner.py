@@ -668,6 +668,14 @@ class GraspPlanner:
                         if hits or margin < C.MIN_JOINT_MARGIN_DEG:
                             seed_errors.append(f"collision or joint margin {margin:.1f}deg")
                             continue
+                        # The whole carry keeps the arm off the torso too (left link5
+                        # touched it mid-carry after a 61deg wrist-bend grasp,
+                        # 2026-09-24); every other waypoint plus the ends.
+                        carry = [*transfer_path, *lower_path]
+                        gap = min(self.arm_body_clearance(q) for q in carry[::2] + [carry[-1]])
+                        if gap < C.ARM_BODY_CLEARANCE:
+                            seed_errors.append(f"carry passes {gap*1000:.1f}mm from the robot's torso")
+                            continue
                         solved = (transfer_path, lower_path)
                         break
                     if solved is None:

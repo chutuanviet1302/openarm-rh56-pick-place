@@ -20,3 +20,6 @@ artifacts/benchmarks/*.json
 
 # Recorded episode viewer output (regenerate with scripts/record_episode.py)
 artifacts/episodes/
+
+# Joint-state logs for PlotJuggler (scripts/log_joint_states.py), ~60MB each
+artifacts/joint_logs/

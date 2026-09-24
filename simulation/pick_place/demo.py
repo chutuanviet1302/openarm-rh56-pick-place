@@ -205,7 +205,8 @@ class Demo:
             self.resolve_lift_from_here()
             ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
             return
-        if min(self.planner.joint_margin_degrees(q) for q in path) < C.MIN_JOINT_MARGIN_DEG:
+        if (min(self.planner.joint_margin_degrees(q) for q in path) < C.MIN_JOINT_MARGIN_DEG
+                or min(self.planner.arm_body_clearance(q) for q in path) < C.ARM_BODY_CLEARANCE):
             self.resolve_lift_from_here()
             ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
             return
@@ -295,6 +296,18 @@ class Demo:
                 f"grasp failed: object did not come with the hand (hand +{hand_rise*100:.1f}cm, "
                 f"object +{rise*100:.1f}cm, slip {slip*1000:.0f}mm, tilt {tilt:.0f}deg); forces {forces}"
             )
+        # Re-grip once the can hangs in the hand: its weight shifts it in the grasp
+        # during the proof lift, and a finger that settled below the target force
+        # (middle at 3-4N, default perception layout) let go when the arm stopped at
+        # the top of the lift (2026-09-24). Fingers already on the can only; the
+        # thumb is left alone (it already presses hardest, squeezing it turns the can).
+        on_can = tuple(
+            name for name, force in scene.finger_contact_forces(side).items()
+            if 0.5 < force < C.REGRIP_BELOW_N and name != "thumb"
+        )
+        if on_can:
+            forces = ex.close_until_contact(side, on_can)
+            self.log.note("re-grip after proof lift (N): " + ", ".join(f"{k}={v:.1f}" for k, v in forces.items()))
 
     def _check_carry_clearance(self, label: str) -> float:
         clearance = self.scene.object_bottom_z() - self.scene.basket_rim_z()

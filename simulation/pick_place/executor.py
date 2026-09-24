@@ -129,7 +129,22 @@ class Executor:
     def follow(self, waypoints: dict[str, list[np.ndarray]], durations: list[float]) -> None:
         """Follow waypoints with continuous joint velocity and zero-speed endpoints."""
         groups = list(waypoints)
-        paths = {group: [self.data.qpos[self.scene.qpos_for(group)].copy(), *waypoints[group]] for group in groups}
+        # Arm groups start from the current *command*, not the measured joints: the
+        # servos track 0.3-1deg behind, and restarting from qpos stepped the command
+        # back by that much in one 1ms step at the start of every segment -- a
+        # torque flip of ~11Nm (right j4 +7.5 -> -4.0Nm), 39 times per run
+        # (PlotJuggler log, scripts/log_joint_states.py, 2026-09-24). Hand groups
+        # keep starting from the measured fingers: a gripping finger's command sits
+        # far past where the can stops it, and opening from there left the fingers
+        # still clamped when the arm retreated (the tuned release relies on this).
+        paths = {
+            group: [
+                (self.data.ctrl[self.scene.ctrl_for(group)] if group.endswith("_arm")
+                 else self.data.qpos[self.scene.qpos_for(group)]).copy(),
+                *waypoints[group],
+            ]
+            for group in groups
+        }
         # Joint speed limit: stretch any segment whose largest joint move would exceed
         # MAX_JOINT_SPEED_RAD_S on average. Without it a 0.18rad waypoint step in a
         # 0.09s slot flung a held can out of the hand (7cm wrist jump in 0.15s at the
