@@ -56,6 +56,10 @@ class JointLogger:
         self.step += 1
         if not force and self.step % self.every:
             return
+        # One row per sim time: PlotJuggler rejects a time axis that repeats
+        # (a planner call starts and ends at the same sim time); the later row wins.
+        if self.rows and float(data.time) <= self.rows[-1][0]:
+            self.rows.pop()
         now = time.perf_counter()
         row = [float(data.time), now - self.start_wall, (now - self.last_wall) * 1000.0, self.thinking, self.leg, self.phase]
         self.last_wall = now

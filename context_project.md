@@ -443,3 +443,8 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 - **Do lệnh truyền vào (đã sửa):** `Executor.follow` bắt đầu mỗi đoạn từ vị trí khớp *đo được* thay vì *lệnh hiện tại*; servo trễ 0.3–1° nên lệnh nhảy lùi trong 1 ms -> mômen đổi dấu ~11.6 N·m, 39 lần/lần chạy. Nay cánh tay bắt đầu từ lệnh hiện tại (bàn tay vẫn từ vị trí thật để thả vật đúng). Kết quả: 39 -> 0 đỉnh, vận tốc lệnh max 418 -> 65 °/s, bước mômen max 11.6 -> 0.6 N·m.
 - **Không phải do máy yếu:** vật lý chạy 2.6× thời gian thực (0.77 ms/2 ms mô phỏng, p99 3.5 ms). Chỗ "đứng hình" là planner tính kế hoạch (1–15 s/lần, vật lý dừng) — phím R phát lại không có đoạn dừng.
 - Kèm theo: siết lại ngón < 5 N sau nâng thử (`REGRIP_BELOW_N`); cánh tay cách thân >= 30 mm dọc cả đường mang. Test 61/61, 20 bài ngẫu nhiên 20/20.
+
+## 24/09/2026 — cuối ngày (master = 8d40dce)
+- Bài chính chạy lại trên MuJoCo sau khi sửa giật: thành công, lệch 2.1 mm, nghiêng 0°, không va chạm; phím R phát lại mượt.
+- Log khớp cho PlotJuggler: `artifacts/joint_logs/retrieve_headless.csv` (trước sửa) và `retrieve_headless_fixed.csv` (sau sửa), ~60 MB mỗi file, không đưa lên git. Máy chưa cài PlotJuggler — cần cài (bản Windows từ GitHub Releases) để xem.
+- Việc tiếp theo: xem log trên PlotJuggler cùng mentor; nâng độ chắc tay phải ở điểm nắm (0.28,-0.235); giảm số lần tay trái phải nắm lại.
