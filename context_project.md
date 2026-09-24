@@ -397,3 +397,21 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 - Đã thử rồi bỏ (làm tệ hơn hoặc đo sai): vòng giữ lực nắm (ngón cái đã ở giới hạn hành trình -> lon bị ép bật ra), kiểm tra "bàn tay mở lún vào vật" (loại cả tư thế chạy tốt).
 - Xoá 2 test lấy chéo tay dựa trên đế xoay giả (-95/-100°, +40°): robot thật không có đế xoay.
 - **Còn mở (24/09):** `test_trial_records_full_evidence` (Demo perception, layout mặc định) đặt lệch 21.5 mm > ngưỡng 20 mm. Lon được căn còn 6.9 mm ở độ cao mang nhưng trôi ~13 mm trong đoạn hạ xuống đáy rổ. Hỏng từ khi thêm giới hạn tốc độ khớp (ở e434639 lon còn rơi khi nâng; đã sửa bằng `Demo.resolve_lift_from_here`: giải lại tư thế nâng từ tư thế hiện tại để khuỷu liên tục). Cần tinh chỉnh đoạn hạ; không nới ngưỡng. Toàn bộ test: 59/60 (trước 2 sửa cuối).
+
+## Tiến độ 24/09/2026 (tối) — HOÀN THÀNH bài rổ giữa bàn, chéo tay (bệ 10 cm)
+
+**Yêu cầu:** tay phải nắm lon bỏ vào rổ ở giữa bàn, tay trái lấy ra đặt ra ngoài; an toàn giới hạn khớp, không va chạm. Robot giữ đúng chiều cao thật (đỉnh 0.78 m).
+
+**Giải pháp đã chạy được:**
+- Bệ làm việc hình chữ nhật cao 10 cm (`work_platform_height=0.10`): dài bằng bàn (1.1 m theo y), rộng nửa bàn (0.5 m), x 0.17–0.67 (mép trước cách nắm tay đang nghỉ 4.7 cm — ở x 0.12 nắm tay lấn vào bệ). Lon, rổ (đáy phẳng, (0.28, 0) — giữa, thẳng thân robot) và điểm đặt ra nằm trên bệ.
+- Nắm xiên (planner `_grasp_tilts`, `GRASP_TILT_CANDIDATES`): ngón tay chúc ~38° dưới ngang, ngón cái và các ngón kẹp ngang thân lon (lệch cao <= 20 mm; góc x+60 để ngón cái trượt qua nắp lon -> bị loại). Trên bệ nắm xiên được thử trước; trên mặt bàn giữ nắm từ trên xuống như cũ.
+- Kết quả: layout danh nghĩa pick (0.28,-0.25) -> rổ (0.28,0) -> đặt (0.28,0.25): sai số 3 mm, nghiêng 0°, không lún. Lệch điểm nắm ±1.5 cm: 7/8 pass (hỏng (0.28,-0.235): tay phải cầm không đủ chắc, lon tuột khi mang).
+- Xem: `python -m scripts.view_retrieve --place-arm right --retrieve-arm left --pick 0.28 -0.25 --basket 0.28 0.0 --retrieve-to 0.28 0.25 --platform 0.10`. Test: `tests/test_retrieve.py::test_right_places_left_retrieves_centre_basket_on_platform`.
+
+**An toàn thêm trong đợt này:** khoảng cách cánh tay (khâu 2–7 + bàn tay) tới thân robot >= 15 mm trong planner (`arm_body_clearance`; khâu 5 tay trái từng sượt thân); nâng lon thẳng đứng theo đường Descartes (`Demo.lift_straight_up`) thay vì nội suy khớp; nâng cao thêm 1.5 cm trên bệ để bù lon tụt; lon được dựng thẳng trước khi đặt khi lấy ra (retrieve); điểm nâng tay dự phòng tính theo bàn tay đang buông / hướng tay chuẩn.
+
+**Mượt khi xem MuJoCo:** vật lý chạy 1.27× thời gian thực; giật là do planner tính giữa chừng (tới 32 s/lần). Đã: giảm vòng lặp IK của seed dự phòng trong `find_raise` (6000 -> 400) — cả bài 169 s -> 75 s; planner chạy ở luồng phụ (`Executor.think`) nên cửa sổ vẫn vẽ lại, xoay camera được trong lúc tính.
+
+**Ảnh "ngón tay xuyên bàn" (người dùng gửi):** đo suốt một lần chạy, ngón tay luôn >= 22 mm trên mặt bàn; vết đen dưới bàn nhiều khả năng là bóng đổ của trình xem, chưa kiểm chứng bằng cách tắt bóng.
+
+**Còn lại / đã thử bỏ:** rổ đáy chữ V (tham số `basket_floor_tilt_deg`, 6/9) — giữ làm tùy chọn, không dùng cho bài chính. Hạ/nâng robot ±10–15 cm không giúp (đoạn mang cần cổ tay z ≈ 0.38 m).

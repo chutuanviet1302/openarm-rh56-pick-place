@@ -102,6 +102,8 @@ APPROACH_STANDOFF = 0.08
 HOVER_HEIGHT = 0.08
 # Extra height of the 'raise' way point (above the hanging hand) over the hover.
 RAISE_ABOVE_HOVER = 0.10
+# Fallback raise heights above the hanging hand (GraspPlanner.find_raise).
+RAISE_ABOVE_HANGING = (0.20, 0.15, 0.10)
 # Room the fist must keep from the basket/object/table along the unplanned joint
 # blends (attention <-> raise <-> hover); the executed arm lags the command by a few mm.
 PATH_CLEARANCE = 0.02
@@ -121,6 +123,13 @@ CARRY_CLEARANCE_ABOVE_RIM = 0.05
 # The servos sag under the can's weight, so the plan asks for this much extra; the
 # requirement above is what gets checked.
 CARRY_CLEARANCE_MARGIN = 0.01
+# Arm links (2..7) and hand vs the robot's own torso/pedestal, planned clearance.
+ARM_BODY_CLEARANCE = 0.015
+LIFT_PATH_STEPS = 8
+# Viewer redraw period while the planner computes (Executor.think).
+VIEWER_THINK_REFRESH_SECONDS = 0.03
+OBLIQUE_LIFT_EXTRA = 0.015  # extra lift on the work platform (GraspPlanner.centers)
+ARM_BODY_CLEARANCE_MAX = 0.05
 # Planned height of the object's bottom above the basket floor at the end of the
 # lowering path. From there the hand keeps descending in small steps until the object
 # actually touches the floor (SET_DOWN_*), and only then opens: releasing a can that is
@@ -148,6 +157,13 @@ SET_DOWN_STEP_SECONDS = 0.15
 # candidate whose transfer *and* set-down poses both solve wins.
 # The grasp itself may also turn about the vertical (a round can has no preferred
 # heading); 0 is the reference posture, tried first.
+# Oblique grasp tilts (axis, degrees about world x/y, right arm; x mirrored for the
+# left), tried after every reference heading (GraspPlanner._grasp_tilts).
+GRASP_TILT_CANDIDATES = (("y", -30.0), ("x", -30.0), ("y", -15.0), ("x", 60.0), ("x", 75.0))
+# An oblique grasp must still pinch the can from the side: thumb and finger tips no
+# further apart in height than this (x+60 put the thumb 54mm above the fingers and it
+# closed over the can's top, 2026-09-24; y-30 / x-30 are 6mm).
+MAX_OBLIQUE_JAW_DZ = 0.02
 GRASP_YAW_CANDIDATES_DEG = (0.0, -30.0, 30.0, 15.0, -15.0, -60.0, 60.0, -90.0, 90.0)
 # How many physically rejected grasps (finger not pressing, proof lift failed) the
 # episode lets go of and retries with another heading before giving up.
@@ -170,6 +186,10 @@ TRANSFER_LONG_PATH_M = 0.45
 
 # --------------------------------------------------------------------------- proof lift
 PROOF_LIFT_HEIGHT = 0.05
+# Retrieval: re-orient the hand so a can held more than this far off vertical is set
+# down level (retrieve.phase_carry_out).
+LEVEL_BEFORE_SET_DOWN_DEG = 2.0
+LEVEL_FRACTIONS = (1.0, 0.7, 0.5, 0.3)
 # Highest gap (can bottom over the basket floor) the hand may let go from when the
 # arm reaches its limit before the can touches down.
 SET_DOWN_MAX_RELEASE_GAP = 0.008

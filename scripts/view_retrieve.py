@@ -9,7 +9,8 @@ two arms touching, and on the idle arm touching the can -- a finished run means 
 of that happened.
 
     python -m scripts.view_retrieve                      # the committed layout
-    python -m scripts.view_retrieve --stand 0.10 --basket 0.28 0.0
+    python -m scripts.view_retrieve --place-arm right --retrieve-arm left --pick 0.20 -0.30         --basket 0.25 0.0 --retrieve-to 0.15 0.35 --floor-tilt 12   # centre basket, V-floor
+    python -m scripts.view_retrieve --place-arm right --retrieve-arm left --pick 0.28 -0.25         --basket 0.28 0.0 --retrieve-to 0.28 0.25 --platform 0.10      # centre basket, 10cm platform
 
 Keys in the window: Esc = free camera, [ / ] = cameras, Space = pause,
 close the window to quit (run it again for a fresh episode).
@@ -35,7 +36,7 @@ DEFAULT_STAND = 0.0
 def build_task(args: argparse.Namespace) -> RetrieveDemo:
     return RetrieveDemo(
         tuple(args.pick), tuple(args.basket), tuple(args.retrieve_to), side=args.retrieve_arm, place_side=args.place_arm,
-        basket_stand_height=args.stand, place_offset=tuple(args.place_offset) if args.place_offset else None,
+        basket_stand_height=args.stand, basket_floor_tilt_deg=args.floor_tilt, work_platform_height=args.platform, place_offset=tuple(args.place_offset) if args.place_offset else None,
     )
 
 
@@ -46,6 +47,8 @@ def main() -> None:
     parser.add_argument("--retrieve-to", type=float, nargs=2, default=list(DEFAULT_RETRIEVE_TO))
     parser.add_argument("--place-arm", choices=("right", "left"), default="right")
     parser.add_argument("--retrieve-arm", choices=("right", "left"), default="right")
+    parser.add_argument("--platform", type=float, default=0.0, help="work platform height (m) under object/basket/set-down")
+    parser.add_argument("--floor-tilt", type=float, default=0.0, help="V-floor insert slope (deg), 0 = flat floor")
     parser.add_argument("--stand", type=float, default=DEFAULT_STAND, help="basket stand height (m), 0 = on the table")
     parser.add_argument("--place-offset", type=float, nargs=2, default=None, help="release point inside the basket (m)")
     args = parser.parse_args()

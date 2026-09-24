@@ -8,6 +8,7 @@ motion with the offending body named.
 
 from __future__ import annotations
 
+import threading
 import time
 
 import mujoco
@@ -87,6 +88,31 @@ class Executor:
                 time.sleep(ahead)
             elif ahead < -0.5:
                 self._wall_anchor = now - sim_time  # fell far behind: re-anchor, don't race
+
+    def think(self, fn, *args, **kwargs):
+        """Run a planner call; with a viewer attached, in a worker thread while this
+        thread keeps redrawing, so the window stays live (camera, panels) instead of
+        freezing for the seconds a plan takes. Physics does not advance meanwhile --
+        the planner only reads the scene (it solves IK on its own MjData copies)."""
+        if self.viewer is None:
+            return fn(*args, **kwargs)
+        outcome: dict = {}
+
+        def work() -> None:
+            try:
+                outcome["value"] = fn(*args, **kwargs)
+            except BaseException as error:  # re-raised on this thread below
+                outcome["error"] = error
+
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        while worker.is_alive():
+            if self.viewer.is_running():
+                self.viewer.sync()
+            worker.join(C.VIEWER_THINK_REFRESH_SECONDS)
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
 
     def seconds_to_steps(self, seconds: float) -> int:
         return max(1, int(seconds / self.model.opt.timestep))

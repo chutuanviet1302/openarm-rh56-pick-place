@@ -24,16 +24,52 @@ from simulation.pick_place.scene import Scene
 RETRIEVE_PHASES = ("perceive", "plan", "ready", "reach", "grasp", "carry", "release")
 
 
-def _table_floor(xy: tuple[float, float]) -> np.ndarray:
-    return np.array([float(xy[0]), float(xy[1]), float(TABLE_TOP_Z)])
+def _table_floor(xy: tuple[float, float], surface_z: float = 0.0) -> np.ndarray:
+    return np.array([float(xy[0]), float(xy[1]), float(TABLE_TOP_Z) + surface_z])
+
+
+def _object_axis(scene: Scene) -> np.ndarray:
+    import mujoco
+
+    matrix = np.zeros(9)
+    mujoco.mju_quat2Mat(matrix, scene.object_quaternion())
+    return matrix.reshape(3, 3)[:, 2]
+
+
+def _rotation_onto_vertical(axis: np.ndarray) -> np.ndarray:
+    """Smallest rotation taking unit vector `axis` (can axis, either sense) to +z."""
+    a = axis / np.linalg.norm(axis)
+    if a[2] < 0.0:
+        a = -a
+    z = np.array([0.0, 0.0, 1.0])
+    v = np.cross(a, z)
+    s, c = float(np.linalg.norm(v)), float(a @ z)
+    if s < 1e-9:
+        return np.eye(3)
+    k = np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+    return np.eye(3) + k + k @ k * ((1.0 - c) / s**2)
+
+
+def _partial_rotation(rotation: np.ndarray, fraction: float) -> np.ndarray:
+    """`rotation` scaled to `fraction` of its angle (same axis)."""
+    if fraction <= 0.0:
+        return np.eye(3)
+    angle = float(np.arccos(np.clip((np.trace(rotation) - 1.0) / 2.0, -1.0, 1.0)))
+    if angle < 1e-9:
+        return np.eye(3)
+    axis = np.array([rotation[2, 1] - rotation[1, 2], rotation[0, 2] - rotation[2, 0], rotation[1, 0] - rotation[0, 1]])
+    axis /= np.linalg.norm(axis)
+    k = np.array([[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]])
+    a = angle * fraction
+    return np.eye(3) + np.sin(a) * k + (1.0 - np.cos(a)) * k @ k
 
 
 def phase_plan(demo: Demo, retrieve_to: tuple[float, float]) -> None:
     """Like Demo.phase_plan, but the set-down target is the bare table point
     `retrieve_to` instead of the scene's one basket (which is where the object
     already sits -- that's what makes this a retrieval, not a fresh pick)."""
-    demo.plan = demo.planner.plan(
-        demo.object_position(), exclude_yaws_deg=tuple(demo.failed_grasp_yaws), place_floor=_table_floor(retrieve_to)
+    demo.plan = demo.executor.think(
+        demo.planner.plan, demo.object_position(), exclude_yaws_deg=tuple(demo.failed_grasp_yaws), place_floor=_table_floor(retrieve_to, demo.scene.work_surface_z)
     )
     demo.log.record("grasp_yaw_deg", float(demo.plan.grasp_yaw_deg))
     demo.log.record("place_yaw_deg", float(demo.plan.place_yaw_deg))
@@ -51,8 +87,7 @@ def phase_carry_out(demo: Demo, retrieve_to: tuple[float, float]) -> None:
     apply, there are no walls to fall short of here."""
     ex, plan, scene, side = demo.executor, demo.plan, demo.scene, demo.side
     arm = f"{side}_arm"
-    demo.resolve_lift_from_here()
-    ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
+    demo.lift_straight_up()
     clearance = scene.object_bottom_z() - scene.basket_rim_z()
     if clearance < C.CARRY_CLEARANCE_ABOVE_RIM - 0.005:
         raise RuntimeError(
@@ -60,14 +95,37 @@ def phase_carry_out(demo: Demo, retrieve_to: tuple[float, float]) -> None:
             f"needed {C.CARRY_CLEARANCE_ABOVE_RIM*100:.1f}cm"
         )
     held = scene.object_position() - scene.wrist_position(side)
-    held_at_grasp_orientation = demo.planner.orientation @ scene.wrist_rotation(side).T @ held
-    try:
-        demo.planner.plan_place(
-            plan, demo.object_position(), held_offset=held_at_grasp_orientation, place_floor=_table_floor(retrieve_to)
-        )
+    planned_orientation = demo.planner.orientation
+    # Level the can for the set-down. Picked off a sloped basket floor it sits in
+    # the hand tilted (13deg measured, 2026-09-24); set down like that only one rim
+    # edge meets the table and the can topples the moment the fingers open. The
+    # hand is turned by the smallest rotation that brings the can's axis vertical.
+    wrist_rotation = scene.wrist_rotation(side)
+    axis_in_hand = wrist_rotation.T @ _object_axis(scene)
+    level = _rotation_onto_vertical(planned_orientation @ axis_in_hand)
+    tilt_deg = float(upright_tilt_degrees(scene.object_quaternion()))
+    # Full levelling can sit outside the arm's reach at the set-down; take the
+    # largest fraction of the correction the planner still solves.
+    fractions = C.LEVEL_FRACTIONS if tilt_deg > C.LEVEL_BEFORE_SET_DOWN_DEG else ()
+    replanned = False
+    for fraction in (*fractions, 0.0):
+        demo.planner.orientation = _partial_rotation(level, fraction) @ planned_orientation
+        held_at_grasp_orientation = demo.planner.orientation @ wrist_rotation.T @ held
+        try:
+            demo.executor.think(
+                demo.planner.plan_place, plan, demo.object_position(), held_offset=held_at_grasp_orientation, place_floor=_table_floor(retrieve_to, demo.scene.work_surface_z)
+            )
+        except RuntimeError as error:
+            last_error = error
+            continue
+        replanned = True
         demo.log.note(f"object held {np.round(held_at_grasp_orientation, 3).tolist()} from the wrist; set-down re-planned")
-    except RuntimeError as error:
-        demo.log.note(f"held-offset compensation unavailable; using nominal set-down ({str(error).splitlines()[0]})")
+        if fraction:
+            demo.log.note(f"can tilted {tilt_deg:.0f}deg in the hand; hand turned to remove {fraction*100:.0f}% of it before set-down")
+        break
+    if not replanned:
+        demo.planner.orientation = planned_orientation
+        demo.log.note(f"held-offset compensation unavailable; using nominal set-down ({str(last_error).splitlines()[0]})")
     demo.log.record("carry_clearance_above_rim_m", clearance)
     demo.log.note(f"object bottom is {clearance*100:+.1f}cm above the basket rim; carrying out to {retrieve_to}")
     path = plan.paths["transfer"]
@@ -77,13 +135,13 @@ def phase_carry_out(demo: Demo, retrieve_to: tuple[float, float]) -> None:
     ex.follow({arm: path}, [C.LOWER_SECONDS / len(path)] * len(path))
     orientation = rotation_z(plan.place_yaw_deg) @ demo.planner.orientation
     _, height = scene.object_extents()
-    resting_z = float(TABLE_TOP_Z) + 0.5 * height
+    resting_z = float(TABLE_TOP_Z) + scene.work_surface_z + 0.5 * height
 
     def seated() -> bool:
-        return scene.object_touches("table_top") and float(scene.object_position()[2]) <= resting_z + C.SET_DOWN_SEATED_TOLERANCE
+        return scene.object_on_work_surface() and float(scene.object_position()[2]) <= resting_z + C.SET_DOWN_SEATED_TOLERANCE
 
     went = ex.descend_until(side, orientation, seated)
-    touching = scene.object_touches("table_top")
+    touching = scene.object_on_work_surface()
     demo.log.record("set_down_descent_m", went)
     demo.log.note(f"descended {went*100:.1f}cm more; object {'rests on' if touching else 'is NOT on'} the table")
     if not touching:
@@ -121,7 +179,7 @@ def run_retrieve(demo: Demo, retrieve_to: tuple[float, float], viewer=None, stop
         except RuntimeError as error:
             if name != "grasp" or len(demo.failed_grasp_yaws) >= C.GRASP_RETRIES:
                 raise
-            demo.failed_grasp_yaws.append(float(demo.plan.grasp_yaw_deg))
+            demo.failed_grasp_yaws.append(float(demo.plan.grasp_key))
             demo.log.note(f"grasp at yaw {demo.plan.grasp_yaw_deg:+.0f} rejected ({error}); letting go and retrying")
             demo.recover_from_failed_grasp()
             index = 0
@@ -154,6 +212,8 @@ class RetrieveDemo:
         attention_deg: dict | None = None,
         place_offset: tuple[float, float] | None = None,
         basket_stand_height: float = 0.0,
+        basket_floor_tilt_deg: float = 0.0,
+        work_platform_height: float = 0.0,
         perception: bool = False,
         verbose: bool = False,
     ) -> None:
@@ -169,7 +229,8 @@ class RetrieveDemo:
             self.pick_position, self.basket_position,
             arm_half_separation=arm_half_separation, left_arm_mount_yaw_deg=left_arm_mount_yaw_deg,
             right_arm_mount_yaw_deg=right_arm_mount_yaw_deg, attention_deg=attention_deg,
-            basket_stand_height=basket_stand_height,
+            basket_stand_height=basket_stand_height, basket_floor_tilt_deg=basket_floor_tilt_deg,
+            work_platform_height=work_platform_height,
         )
         self.place_in = Demo(perception=perception, verbose=verbose, side=self.place_side, scene=scene, place_offset=place_offset)
         self.retrieve: Demo | None = None
@@ -206,7 +267,7 @@ def run_retrieve_trial(task: RetrieveDemo, viewer=None, stop_after: str | None =
     if failure is None and stop_after is None:
         if still_in_basket:
             failure = "object footprint is still inside the basket after set-down"
-        elif not scene.object_touches("table_top"):
+        elif not scene.object_on_work_surface():
             failure = "object is not resting on the table after set-down"
         elif tilt > C.PROOF_LIFT_MAX_TILT_DEG:
             failure = f"final object tilt {tilt:.1f}deg exceeds {C.PROOF_LIFT_MAX_TILT_DEG:.0f}deg"

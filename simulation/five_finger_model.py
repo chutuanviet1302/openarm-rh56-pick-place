@@ -71,6 +71,12 @@ BASKET_FLOOR_Z = TABLE_TOP_Z + 0.005
 BASKET_HALF_WIDTH = 0.09
 BASKET_WALL_HEIGHT = 0.05
 BASKET_WALL_THICKNESS = 0.01
+BASKET_SLOPE_FRICTION = 0.05  # V-floor insert plates (see basket_floor_tilt_deg)
+BASKET_VALLEY_Y = 0.04       # V-floor groove, basket frame (+y = toward the left arm)
+# Optional work platform (work_platform_height): a rectangular block on the table in
+# front of the robot, as long as the table (y) and half as wide (x), clear of the
+# pedestal's base plate (x <= 0.10). The object, basket and set-down spot sit on it.
+WORK_PLATFORM_X = (0.17, 0.67)  # front edge 47mm clear of the resting fists (x 0.123)
 # The stock floor-standing pedestal is placed on the measured base plate.
 PEDESTAL_RAISE = SHOULDER_AXIS_Z - TABLE_TOP_Z - VENDOR_SHOULDER_ABOVE_PEDESTAL
 # Flange -> Inspire hand base transform, derived from the two frames rather than tuned:
@@ -165,6 +171,7 @@ def build_five_finger_spec(
     *, pick_bottle: bool = False, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B,
     arm_half_separation: float | None = None, left_arm_mount_yaw_deg: float | None = None,
     right_arm_mount_yaw_deg: float | None = None, basket_stand_height: float = 0.0,
+    basket_floor_tilt_deg: float = 0.0, work_platform_height: float = 0.0,
 ) -> mujoco.MjSpec:
     if not INSPIRE_ROOT.is_dir():
         raise FileNotFoundError("Inspire RH56DFX assets missing; clone correlllab/rh56_controller with h1_mujoco")
@@ -369,7 +376,7 @@ def build_five_finger_spec(
         # Pick location A, standing on the table top.
         bottle = arm.worldbody.add_body(
             name="pick_bottle",
-            pos=[float(pick_position[0]), float(pick_position[1]), OBJECT_HALF_HEIGHT + TABLE_TOP_Z],
+            pos=[float(pick_position[0]), float(pick_position[1]), OBJECT_HALF_HEIGHT + TABLE_TOP_Z + work_platform_height],
         )
         bottle.add_freejoint(name="pick_bottle_joint")
         bottle.add_geom(
@@ -420,6 +427,21 @@ def build_five_finger_spec(
         # with its shoulders 0.70m up, so a basket on the bare top sits at the very
         # edge of both arms' reach. Full collision; the executor treats it like the
         # basket (any hand/arm contact aborts the trajectory).
+        if work_platform_height < 0.0:
+            raise ValueError("work_platform_height must be >= 0")
+        if work_platform_height > 0.0:
+            x0, x1 = WORK_PLATFORM_X
+            for xy, label in ((pick_position, "pick point"), (basket_position, "basket")):
+                if not (x0 + OBJECT_RADIUS <= float(xy[0]) <= x1 - OBJECT_RADIUS):
+                    raise ValueError(f"{label} x={xy[0]} is off the work platform {WORK_PLATFORM_X}")
+            arm.worldbody.add_geom(
+                name="work_platform",
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                pos=[0.5 * (x0 + x1), 0.0, TABLE_TOP_Z + 0.5 * work_platform_height],
+                size=[0.5 * (x1 - x0), TABLE_HALF_WIDTH, 0.5 * work_platform_height],
+                friction=[1.0, 0.005, 0.0001],
+                rgba=[0.82, 0.74, 0.60, 1.0],
+            )
         if basket_stand_height < 0.0:
             raise ValueError("basket_stand_height must be >= 0")
         if basket_stand_height > 0.0:
@@ -432,13 +454,36 @@ def build_five_finger_spec(
             )
         basket = arm.worldbody.add_body(
             name="place_basket",
-            pos=[float(basket_position[0]), float(basket_position[1]), BASKET_FLOOR_Z + basket_stand_height],
+            pos=[float(basket_position[0]), float(basket_position[1]), BASKET_FLOOR_Z + basket_stand_height + work_platform_height],
         )
         basket_color = [0.1, 0.55, 0.2, 1.0]
         bw = BASKET_HALF_WIDTH
         wh = 0.5 * (BASKET_WALL_HEIGHT - 0.005)
         wz = 0.005 + wh
         basket.add_geom(name="place_basket_bottom", type=mujoco.mjtGeom.mjGEOM_BOX, size=[bw, bw, 0.005], rgba=basket_color)
+        # Optional V-shaped insert on the floor: two low-friction plates sloping down
+        # at `basket_floor_tilt_deg` into a groove along x at y = BASKET_VALLEY_Y (toward
+        # the left arm). A can set down anywhere on the -y side slides into the groove
+        # and stands there upright, with free room on its +y side for the left hand's
+        # fingers (a single slope parked it against the +y wall, where the fingers
+        # could not get round it). Priority 1: the contact uses the plates' friction,
+        # not the can's 1.2 -- a smooth plastic insert.
+        if basket_floor_tilt_deg:
+            theta = np.deg2rad(basket_floor_tilt_deg)
+            thick, groove_y, groove_z = 0.004, BASKET_VALLEY_Y, 0.005 + 0.0005
+            for name, y0, y1, sign in (("a", -bw, groove_y, -1.0), ("b", groove_y, bw, 1.0)):
+                length = y1 - y0
+                rise = length * np.tan(theta)
+                normal = np.array([0.0, -sign * np.sin(theta), np.cos(theta)])
+                top_mid = np.array([0.0, 0.5 * (y0 + y1), groove_z + 0.5 * rise])
+                centre = top_mid - normal * 0.5 * thick
+                half = 0.5 * sign * theta
+                basket.add_geom(
+                    name=f"place_basket_slope_{name}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                    pos=centre.tolist(), quat=[float(np.cos(half)), float(np.sin(half)), 0.0, 0.0],
+                    size=[bw, 0.5 * length / np.cos(theta), 0.5 * thick],
+                    friction=[BASKET_SLOPE_FRICTION, 0.005, 0.0001], priority=1, rgba=[0.3, 0.75, 0.4, 1.0],
+                )
         basket.add_geom(name="place_basket_left", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[bw + 0.5 * BASKET_WALL_THICKNESS, 0.0, wz], size=[0.5 * BASKET_WALL_THICKNESS, bw + 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
         basket.add_geom(name="place_basket_right", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[-(bw + 0.5 * BASKET_WALL_THICKNESS), 0.0, wz], size=[0.5 * BASKET_WALL_THICKNESS, bw + 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
         basket.add_geom(name="place_basket_front", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, bw + 0.5 * BASKET_WALL_THICKNESS, wz], size=[bw, 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
@@ -450,11 +495,13 @@ def build_five_finger_model(
     *, pick_bottle: bool = False, pick_position=PICK_POSITION_A, basket_position=BASKET_POSITION_B,
     arm_half_separation: float | None = None, left_arm_mount_yaw_deg: float | None = None,
     right_arm_mount_yaw_deg: float | None = None, basket_stand_height: float = 0.0,
+    basket_floor_tilt_deg: float = 0.0, work_platform_height: float = 0.0,
 ) -> mujoco.MjModel:
     model = build_five_finger_spec(
         pick_bottle=pick_bottle, pick_position=pick_position, basket_position=basket_position,
         arm_half_separation=arm_half_separation, left_arm_mount_yaw_deg=left_arm_mount_yaw_deg,
         right_arm_mount_yaw_deg=right_arm_mount_yaw_deg, basket_stand_height=basket_stand_height,
+        basket_floor_tilt_deg=basket_floor_tilt_deg, work_platform_height=work_platform_height,
     ).compile()
     _stiffen_arm_actuators(model)
     _soften_hand_actuators(model)

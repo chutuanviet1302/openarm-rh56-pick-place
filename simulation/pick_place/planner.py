@@ -38,6 +38,10 @@ class Plan:
     paths: dict[str, list[np.ndarray]] = field(default_factory=dict)
     centers: dict[str, np.ndarray] = field(default_factory=dict)
     grasp_yaw_deg: float = 0.0
+    # Heading id for Demo's physics-retry exclusion list (yaw + 1000 * tilt index)
+    # and the oblique tilt used, if any (GraspPlanner._grasp_tilts).
+    grasp_key: float = 0.0
+    grasp_tilt: tuple[str, float] | None = None
     place_yaw_deg: float = 0.0
     route_strategy: str = "direct"
     side: str = "right"
@@ -147,7 +151,11 @@ class GraspPlanner:
         hover = pregrasp + np.array([0.0, 0.0, C.HOVER_HEIGHT])
 
         # Wrist rise that puts the object's bottom the required clearance over the rim.
-        lift_height = scene.carry_bottom_z() + C.CARRY_CLEARANCE_MARGIN + 0.5 * height - bottle[2]
+        # Oblique grasps on the work platform let the can settle ~1cm in the hand on
+        # the way up (lift ended 4.1-4.2cm over the rim for a 5cm requirement,
+        # 2026-09-24), so the lift aims correspondingly higher there.
+        margin = C.CARRY_CLEARANCE_MARGIN + (C.OBLIQUE_LIFT_EXTRA if scene.work_surface_z > 0.0 else 0.0)
+        lift_height = scene.carry_bottom_z() + margin + 0.5 * height - bottle[2]
         lift = grasp + np.array([0.0, 0.0, lift_height])
 
         drop = (
@@ -200,27 +208,68 @@ class GraspPlanner:
         `exclude_yaws_deg` skips headings already tried and found wanting in physics
         (the executor's contact / proof-lift checks), so a retry picks another.
         `place_floor` is forwarded to `centers()`: the scene's one basket by default,
-        or a bare table point when retrieving an object back out of it.
+        or a bare table point when retrieving an object back out of it. Oblique grasp
+        headings (_grasp_tilts) are tried only after every reference heading failed.
         """
-        failures = [f"grasp yaw {yaw:+.0f}: failed in physics, not retried" for yaw in exclude_yaws_deg]
-        for yaw in C.GRASP_YAW_CANDIDATES_DEG:
-            if yaw in exclude_yaws_deg:
-                continue
-            self.orientation = rotation_z(yaw) @ self.base_orientation
-            try:
-                plan = self._plan_pick(object_position)
-            except RuntimeError as error:
-                failures.append(f"grasp yaw {yaw:+.0f}: {error}")
-                continue
-            plan.grasp_yaw_deg = yaw
-            try:
-                self.plan_place(plan, object_position, place_floor=place_floor)
-            except RuntimeError as error:
-                failures.append(f"grasp yaw {yaw:+.0f}: {error}")
-                continue
-            return plan
+        failures = [f"grasp heading key {key:+.0f}: failed in physics, not retried" for key in exclude_yaws_deg]
+        for tilt_index, tilt in self._grasp_tilts():
+            for yaw in C.GRASP_YAW_CANDIDATES_DEG:
+                # Key of this heading for exclude_yaws_deg: the yaw itself for the
+                # reference (untilted) grasp, so existing callers are unchanged.
+                key = yaw + 1000.0 * tilt_index
+                if key in exclude_yaws_deg:
+                    continue
+                label = f"grasp yaw {yaw:+.0f}" + (f" tilt {tilt[0]}{tilt[1]:+.0f}" if tilt else "")
+                self.orientation = rotation_z(yaw) @ self._tilted(tilt)
+                try:
+                    plan = self._plan_pick(object_position)
+                except RuntimeError as error:
+                    failures.append(f"{label}: {error}")
+                    continue
+                plan.grasp_yaw_deg, plan.grasp_key, plan.grasp_tilt = yaw, key, tilt
+                try:
+                    self.plan_place(plan, object_position, place_floor=place_floor)
+                except RuntimeError as error:
+                    failures.append(f"{label}: {error}")
+                    continue
+                return plan
         self.orientation = self.base_orientation
         raise RuntimeError("no reachable grasp at any hand yaw:\n  " + "\n  ".join(failures))
+
+    def _grasp_tilts(self) -> list[tuple[int, tuple[str, float] | None]]:
+        """(index, tilt) pairs to try: the reference grasp first, then the oblique ones.
+
+        The reference grasp comes from the natural straight-wrist posture: fingers
+        steeply down, fine on the table top. With the work raised (work platform,
+        2026-09-24: 10cm) that grasp pins joints near the shoulder, while an oblique
+        hand -- fingers ~45deg below horizontal, pointing forward and in -- reaches
+        the centre basket with 25deg of joint margin on both arms. Tilts are about the
+        world x/y axes applied to the reference orientation; x flips sign for the
+        left arm (mirror image)."""
+        mirror = 1.0 if self.side == "right" else -1.0
+        tilts = [(axis, deg * (mirror if axis == "x" else 1.0)) for axis, deg in C.GRASP_TILT_CANDIDATES]
+        if not self.use_seed_bank:
+            return [(0, None)]
+        oblique = []
+        for i, tilt in enumerate(tilts):
+            fingers, thumb = self.jaw_offsets(self._tilted(tilt))
+            if abs(float(thumb[2] - fingers[2])) <= C.MAX_OBLIQUE_JAW_DZ:
+                oblique.append((i + 1, tilt))
+        # On the raised work platform the steep reference grasp can still plan, but at
+        # a 41/36deg wrist bend it missed the can in physics and shoved it aside, so
+        # the oblique grasps -- the natural ones up there -- go first.
+        if self.scene.work_surface_z > 0.0:
+            return oblique + [(0, None)]
+        return [(0, None)] + oblique
+
+    def _tilted(self, tilt: tuple[str, float] | None) -> np.ndarray:
+        if tilt is None:
+            return self.base_orientation
+        axis, deg = tilt
+        a = np.radians(deg)
+        c, s = np.cos(a), np.sin(a)
+        r = np.array([[1, 0, 0], [0, c, -s], [0, s, c]]) if axis == "x" else np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+        return r @ self.base_orientation
 
     def plan_pick(self, object_position: np.ndarray) -> Plan:
         """Plan only through proof-lift; used by the bimanual route preflight."""
@@ -272,40 +321,69 @@ class GraspPlanner:
         #   - the grasp itself keeps its single ARM_SEED solve, so a grasp at a joint
         #     limit is still rejected exactly as before.
         seeds = (hover_joints, C.ARM_SEED[self.side])
-        for extra in np.linspace(C.RAISE_ABOVE_HOVER, 0.0, 5):
-            for dx, raw_dy in C.RAISE_XY_OFFSETS:
-                dy = raw_dy if self.side == "right" else -raw_dy
-                center = np.array([hanging[0] + dx, hanging[1] + dy, hover_center[2] + extra])
-                label = f"+{extra*100:.0f}cm ({dx:+.2f},{dy:+.2f})"
-                candidate = None
-                seed_errors = []
-                for seed_index, seed in enumerate(seeds):
-                    try:
-                        candidate = solve_pose_ik(self.model, self.side, center, self.orientation, seed)
-                    except RuntimeError as error:
-                        seed_errors.append(str(error).splitlines()[0])
-                        continue
-                    margin = self.joint_margin_degrees(candidate)
-                    if margin < C.MIN_JOINT_MARGIN_DEG:
-                        # A pinched solution from this seed is a REAL rejection: the
-                        # next seed may not rescue it (the executable-layout guard in
-                        # tests/test_bimanual_routing.py matches exactly this
-                        # raise-phase "joint margin only 0.0deg" rejection).
-                        if seed_index + 1 < len(seeds):
-                            seed_errors.append(f"joint margin only {margin:.1f}deg; trying reference-posture seed")
-                            candidate = None
+        # Real-height robot (2026-09-24): returning from a centre basket, neither seed
+        # reached any raise candidate. The seed bank is a last resort per candidate,
+        # tried only when every seed above FAILED its IK (same guard as above).
+        bank = self._seed_bank(C.PLACE_SEED_BANK_SIZE) if self.use_seed_bank else []
+        # The raise point is only passed through, so for an oblique grasp it may hold
+        # the reference (fingers-down) hand instead: near the shoulder the tilted hand
+        # has no IK there (work platform, 2026-09-24). The blends either side are
+        # collision-checked as always.
+        orientations = [self.orientation]
+        if not np.allclose(self.orientation, self.base_orientation):
+            orientations.append(self.base_orientation)
+        for raise_orientation in orientations:
+            # Heights above the hover first (unchanged order for layouts that plan),
+            # then heights above the hanging hand itself: with the work raised the
+            # hover sits near shoulder height, where no raise point solves, and the
+            # lower ones swept the hand into the platform's front edge.
+            heights = [hover_center[2] + extra for extra in np.linspace(C.RAISE_ABOVE_HOVER, 0.0, 5)]
+            heights += [hanging[2] + lift for lift in C.RAISE_ABOVE_HANGING]
+            for height in heights:
+                extra = height - hover_center[2]
+                for dx, raw_dy in C.RAISE_XY_OFFSETS:
+                    dy = raw_dy if self.side == "right" else -raw_dy
+                    center = np.array([hanging[0] + dx, hanging[1] + dy, height])
+                    label = f"+{extra*100:.0f}cm ({dx:+.2f},{dy:+.2f})"
+                    candidate = None
+                    seed_errors = []
+                    for seed_index, seed in enumerate(seeds):
+                        try:
+                            candidate = solve_pose_ik(self.model, self.side, center, raise_orientation, seed)
+                        except RuntimeError as error:
+                            seed_errors.append(str(error).splitlines()[0])
                             continue
-                        candidate = None
+                        margin = self.joint_margin_degrees(candidate)
+                        if margin < C.MIN_JOINT_MARGIN_DEG:
+                            # A pinched solution from this seed is a REAL rejection: the
+                            # next seed may not rescue it (the executable-layout guard in
+                            # tests/test_bimanual_routing.py matches exactly this
+                            # raise-phase "joint margin only 0.0deg" rejection).
+                            if seed_index + 1 < len(seeds):
+                                seed_errors.append(f"joint margin only {margin:.1f}deg; trying reference-posture seed")
+                                candidate = None
+                                continue
+                            candidate = None
+                            break
                         break
-                    break
-                if candidate is None:
-                    failures.append(f"{label}: {seed_errors[-1]}")
-                    continue
-                blocked = self.blend_contacts(attention, candidate, obstacles) | self.blend_contacts(candidate, hover_joints, obstacles)
-                if blocked:
-                    failures.append(f"{label}: blend hits {', '.join(sorted(blocked))}")
-                    continue
-                return candidate, center
+                    if candidate is None and len(seed_errors) == len(seeds) and all("IK failed" in e for e in seed_errors):
+                        for seed in bank:
+                            try:
+                                q = solve_pose_ik(self.model, self.side, center, raise_orientation, seed,
+                                                  max_iterations=C.GRASP_SEED_BANK_ITERATIONS)
+                            except RuntimeError:
+                                continue
+                            if self.joint_margin_degrees(q) >= C.MIN_JOINT_MARGIN_DEG:
+                                candidate = q
+                                break
+                    if candidate is None:
+                        failures.append(f"{label}: {seed_errors[-1]}")
+                        continue
+                    blocked = self.blend_contacts(attention, candidate, obstacles) | self.blend_contacts(candidate, hover_joints, obstacles)
+                    if blocked:
+                        failures.append(f"{label}: blend hits {', '.join(sorted(blocked))}")
+                        continue
+                    return candidate, center
         raise RuntimeError("no clear raise way point:\n    " + "\n    ".join(failures))
 
     def _seed_bank(self, size: int) -> list[np.ndarray]:
@@ -425,6 +503,15 @@ class GraspPlanner:
         clearance = self.fingertip_floor_clearance(joints["grasp"])
         if clearance < C.MIN_FLOOR_CLEARANCE:
             raise RuntimeError(f"grasp fingertip floor clearance only {clearance*1000:.1f}mm")
+        # The arm itself must keep off the torso/pedestal too (the executor aborts on
+        # any touch): an oblique left grasp bent the wrist 61deg and link5 grazed the
+        # torso on the proof lift (2026-09-24). Checked at the phase poses and along
+        # the grasp -> lift blend the proof lift and lift follow.
+        blend = [joints["grasp"] + (joints["lift"] - joints["grasp"]) * f for f in np.linspace(0.0, 1.0, 6)]
+        for label, q in [(k, joints[k]) for k in ("pregrasp", "hover", "lift")] + [("grasp->lift", q) for q in blend]:
+            gap = self.arm_body_clearance(q)
+            if gap < C.ARM_BODY_CLEARANCE:
+                raise RuntimeError(f"{label}: arm {gap*1000:.1f}mm from the robot's torso/pedestal")
 
         return Plan(joints, {}, centers, side=self.side, lift_twist_deg=twist, grasp_orientation=grasp_orientation,
             phase_orientations=dict(self._twist_phase_orientations),
@@ -736,13 +823,34 @@ class GraspPlanner:
             for f in np.linspace(0.0, 1.0, samples + 1)[1:-1]
         ]
 
+    def arm_body_clearance(self, arm_joints: np.ndarray) -> float:
+        """Smallest distance (m, capped at ARM_BODY_CLEARANCE_MAX) from this arm's links
+        2..7 and hand to the robot's own torso/pedestal, with the arm at `arm_joints`."""
+        scene, model = self.scene, self.model
+        data = mujoco.MjData(model)
+        data.qpos[:] = scene.data.qpos
+        data.qpos[scene.arm_qpos[self.side]] = arm_joints
+        mujoco.mj_kinematics(model, data)
+        mounts = {f"openarm_{self.side}_link{i}" for i in (0, 1)}
+        best = C.ARM_BODY_CLEARANCE_MAX
+        fromto = np.zeros(6)
+        for geom in range(model.ngeom):
+            if scene.robot_side(geom) != self.side or not (model.geom_contype[geom] or model.geom_conaffinity[geom]):
+                continue
+            if (model.body(int(model.geom_bodyid[geom])).name or "") in mounts:
+                continue
+            for body_geom in scene.robot_body_geoms:
+                best = min(best, mujoco.mj_geomDistance(model, data, geom, body_geom, best, fromto))
+        return float(best)
+
     def fingertip_floor_clearance(self, arm_joints: np.ndarray) -> float:
         data = self._pregrasp_data(arm_joints)
         tips = [
             self.model.site(f"{HAND_PREFIX}{self.side}_{self.side}_{finger}_tip").id
             for finger in C.FINGER_NAMES
         ]
-        return float(np.min(data.site_xpos[tips, 2]))
+        # Measured from the surface the work happens on (table top or work platform).
+        return float(np.min(data.site_xpos[tips, 2])) - self.scene.work_surface_z
 
     # ------------------------------------------------------------------ debugging
     def describe(self, plan: Plan) -> str:

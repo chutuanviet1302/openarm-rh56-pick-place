@@ -33,6 +33,25 @@ class RetrieveFromBasketTests(unittest.TestCase):
         # grasp (demo.py's fingers_not_pressing gate, checked before proof lift).
         self.assertGreaterEqual(result.grasp_forces["thumb"], 6.0)
 
+    def test_right_places_left_retrieves_centre_basket_on_platform(self):
+        """The cross-arm task with the basket at the table centre, on the real-height
+        robot: a 10cm work platform (table-long, half the table deep, x 0.17..0.67)
+        carries the object, the basket (flat floor, centred on the torso axis) and the
+        set-down spot. Up there the steep top grasp pins the joints, so both arms use
+        the oblique grasp (fingers ~38deg below horizontal, thumb and fingers pinching
+        level). Every safety abort is live: arm/hand contact with the table, platform,
+        basket or torso, the two arms touching, the idle arm touching the can. Measured
+        2026-09-24: 7/8 with the pick moved +-1.5cm; this nominal run 3mm, 0deg."""
+        task = RetrieveDemo(
+            (0.28, -0.25), (0.28, 0.0), (0.28, 0.25), side="left", place_side="right", work_platform_height=0.10,
+        )
+        result = run_retrieve_trial(task)
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertEqual((result.source_arm, result.target_arm), ("right", "left"))
+        self.assertLess(result.placement_error_m, 0.02)
+        self.assertLess(result.bottle_tilt_deg, 5.0)
+        self.assertEqual(result.max_penetration_m, 0.0)
+
     def test_place_leg_failure_is_not_masked_as_a_retrieve_failure(self):
         """An unreachable pick position must fail in the place-into-basket leg
         with its own reason, not be silently swallowed or blamed on retrieval."""
