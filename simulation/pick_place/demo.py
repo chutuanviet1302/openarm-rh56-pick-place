@@ -428,7 +428,9 @@ class Demo:
         # and skid a centimetre or more. A few more millimetres of descent let the
         # fingers give and the base settle before the hand opens.
         _, height = scene.object_extents()
-        resting_z = float(scene.basket_floor()[2]) + 0.5 * height
+        # basket_floor() is the floor plate's centre; the can stands on its top face.
+        floor_half = float(self.model.geom("place_basket_bottom").size[2])
+        resting_z = float(scene.basket_floor()[2]) + floor_half + 0.5 * height
 
         def seated() -> bool:
             # On a V-floor insert the can meets a plate a few mm above the floor.

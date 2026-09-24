@@ -236,8 +236,13 @@ class Executor:
         still abort through _step()."""
         scene = self.scene
         seed = self.data.ctrl[scene.arm_actuators[side]].copy()
-        start_z = float(scene.wrist_position(side)[2])
-        target = scene.wrist_position(side).copy()
+        # Descend from where the arm is *commanded* to be, not from the measured
+        # wrist: under the held can's load the two differ by several mm, and
+        # re-targeting the measured pose each step walked the wrist ~11mm sideways
+        # during a 0.8cm set-down (can 6.9mm -> 21.5mm off the basket centre,
+        # default perception layout, 2026-09-24).
+        target = scene.wrist_position_at(side, seed).copy()
+        start_z = float(target[2])
         descended = 0.0
         while not stop() and descended < max_depth:
             target[2] = start_z - descended - C.SET_DOWN_STEP
