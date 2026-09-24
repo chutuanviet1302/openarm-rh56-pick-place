@@ -416,3 +416,22 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 
 **Còn lại / đã thử bỏ:** rổ đáy chữ V (tham số `basket_floor_tilt_deg`, 6/9) — giữ làm tùy chọn, không dùng cho bài chính. Hạ/nâng robot ±10–15 cm không giúp (đoạn mang cần cổ tay z ≈ 0.38 m).
 - **Đã sửa (24/09):** `test_trial_records_full_evidence` (lệch 21.5 mm) — hai lỗi ở bước hạ lon vào rổ: (1) `Executor.descend_until` lấy đích theo cổ tay *đo được* (lệch vài mm do tải) nên cổ tay trôi ngang ~11 mm; giờ theo tư thế *được ra lệnh* (FK của ctrl). (2) `resting_z` trong `Demo` dùng tâm tấm đáy rổ thay vì mặt trên (thiếu 5 mm) nên điều kiện "đã chạm đáy" không bao giờ đạt, tay ép xuống hết 4 cm. **Toàn bộ test: 61/61 OK.**
+
+## Tiến độ 24/09/2026 — trạng thái cuối ngày (master = 4acb04c)
+
+**Đã xong và đã merge vào master:**
+- Mô phỏng đúng robot thật: đỉnh robot 0.78 m, đỉnh camera 0.88 m (vai 0.697 m), giá camera xanh, tư thế nghỉ đầu ngón cách bàn 40 mm.
+- Bài chính: rổ đáy phẳng ở giữa bàn (0.28, 0) trên bệ 10 cm; tay phải bỏ lon vào rổ, tay trái lấy ra đặt ra ngoài. Danh nghĩa: sai số 3–7 mm, nghiêng 0°, không va chạm; lệch điểm nắm ±1.5 cm: 7/8.
+- An toàn: dừng khi tay/cánh tay chạm bàn, bệ, rổ, thân robot; hai tay chạm nhau; tay nghỉ chạm lon; margin khớp >= 3°; tốc độ khớp tay <= 0.6 rad/s; cánh tay cách thân >= 15 mm (planner).
+- Sửa lỗi đặt lon: hạ theo tư thế được ra lệnh (không theo cổ tay đo được), độ cao "đã chạm đáy" tính từ mặt trên tấm đáy.
+- Xem MuJoCo mượt hơn: planner chạy luồng phụ (cửa sổ không treo), cả bài 169 s -> 75 s; phím **R** phát lại lần chạy đã ghi, không có đoạn dừng.
+- Test: **61/61 OK** (lần chạy đầy đủ cuối, trước commit phím R — commit này chỉ sửa script xem).
+
+**Chạy để xem:**
+`python -m scripts.view_retrieve --place-arm right --retrieve-arm left --pick 0.28 -0.25 --basket 0.28 0.0 --retrieve-to 0.28 0.25 --platform 0.10`
+
+**Việc tiếp theo đề xuất:**
+1. Nâng độ ổn định tay phải ở điểm nắm (0.28, -0.235) (lon tuột khi mang — cầm chưa đủ chắc).
+2. Tay trái đôi khi phải nắm lại lần 2–3; ưu tiên hướng nắm đã thành công (-60°) để giảm thời gian.
+3. Kiểm chứng giả thuyết "ngón tay xuyên bàn" là bóng đổ (tắt bóng trong trình xem).
+4. Chuẩn bị chuyển sang robot thật (ROS 2 / MoveIt) theo lộ trình trong project-scope.
