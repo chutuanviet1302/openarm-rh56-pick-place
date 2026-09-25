@@ -13,6 +13,8 @@ from simulation.five_finger_model import TABLE_TOP_Z, OBJECT_HALF_HEIGHT, OBJECT
 FOOTPRINT_CELL_M = 0.005
 # A depth step this large between neighbouring pixels marks a silhouette edge.
 DEPTH_EDGE_JUMP_M = 0.02
+# A support surface measured this close to the table plane is the table.
+TABLE_SNAP_M = 0.005
 
 
 
@@ -104,10 +106,9 @@ class VisionDetector:
         rotation = data.cam_xmat[self.cam_id].reshape(3, 3)
         return camera_points @ rotation.T + data.cam_xpos[self.cam_id]
 
-    def _lid_centre(self, data: mujoco.MjData, depth: np.ndarray, rows: np.ndarray, columns: np.ndarray,
-                    guess_xy: np.ndarray) -> np.ndarray | None:
-        """Centre of the object's footprint from the depth points near the colour-based
-        guess; None if too few are seen."""
+    def _window_points(self, data: mujoco.MjData, depth: np.ndarray, rows: np.ndarray, columns: np.ndarray):
+        """World points of the non-silhouette depth pixels in a window around the
+        colour mask, plus that window's bounds and validity mask."""
         margin = 3 * max(int(0.5 * (columns.max() - columns.min())), 4)
         r0, r1 = max(rows.min() - margin, 0), min(rows.max() + margin, depth.shape[0] - 1)
         c0, c1 = max(columns.min() - margin, 0), min(columns.max() + margin, depth.shape[1] - 1)
@@ -129,6 +130,29 @@ class VisionDetector:
         points = self.deproject(
             data, window_rows[valid].astype(float), window_columns[valid].astype(float), window_depth[valid].astype(float)
         )
+        return points, valid, r0, c0
+
+    def _support_z(self, points: np.ndarray, guess_xy: np.ndarray) -> float | None:
+        """Height of the surface the object stands on (table, raised work platform or
+        basket floor), measured in depth on a ring just outside its footprint. With the
+        old table-plane assumption a can on the 10cm platform read 100mm low
+        (2026-09-25). The object's own side reaches into the ring when the colour guess
+        is off-centre, so the lower quartile is taken, and only points well below the
+        object's top count."""
+        near = np.linalg.norm(points[:, :2] - guess_xy, axis=1)
+        inside = near <= OBJECT_RADIUS
+        if inside.sum() < 10:
+            return None
+        top = float(np.percentile(points[inside, 2], 99.0))
+        ring = (near >= OBJECT_RADIUS + 0.01) & (near <= OBJECT_RADIUS + 0.04) & (points[:, 2] < top - OBJECT_HALF_HEIGHT)
+        if ring.sum() >= 20:
+            return float(np.percentile(points[ring, 2], 25.0))
+        return top - 2.0 * OBJECT_HALF_HEIGHT  # no surface in view: from the top instead
+
+    def _lid_centre(self, data: mujoco.MjData, depth: np.ndarray, rows: np.ndarray, columns: np.ndarray,
+                    points: np.ndarray, valid: np.ndarray, r0: int, c0: int, lid_z: float) -> np.ndarray | None:
+        """Centre of the object's footprint from the depth points near the colour-based
+        guess; None if too few are seen."""
         # Every visible object point (lid, rim and side) projects inside the can's
         # footprint disc, and the rim -- seen whole from above -- reaches its edge, so
         # the disc's centre is the midpoint of the point cloud's x and y extents.
@@ -140,7 +164,7 @@ class VisionDetector:
         # The basket rim is 5 cm above the table and can be only a few centimetres
         # from the can. Keep the upper can surface, not every generic above-table
         # point, otherwise grid connectivity merges the basket into the footprint.
-        above_table = points[:, 2] > TABLE_TOP_Z + 0.065
+        above_table = points[:, 2] > lid_z - (2.0 * OBJECT_HALF_HEIGHT - 0.065)
         window = valid.copy()
         window[valid] = above_table
         xy = points[above_table, :2]
@@ -195,9 +219,6 @@ class VisionDetector:
         rows, columns, values = rows[keep], columns[keep], values[keep]
 
         world = self.deproject(data, rows.astype(float), columns.astype(float), values.astype(float))
-        # Tabletop assumption: the object stands on the known table plane, so its centre
-        # height follows from its height; only x/y have to come from the image.
-        centre_z = TABLE_TOP_Z + OBJECT_HALF_HEIGHT
         surface_xy = world[:, :2]
         camera_xy = data.cam_xpos[self.cam_id][:2]
         centroid = surface_xy.mean(axis=0)
@@ -208,7 +229,19 @@ class VisionDetector:
         # direction (shading drops one side below the red threshold), which biases the
         # circle fit sideways by several mm. From the head camera the whole footprint
         # is in view in depth, and its extents locate the axis directly: prefer that.
-        lid_xy = self._lid_centre(data, depth, rows, columns, centre_xy)
+        # The support height is not assumed (table, platform or basket floor): it is
+        # measured in depth around the object, and the centre is half a height above it.
+        points, valid, r0, c0 = self._window_points(data, depth, rows, columns)
+        support_z = self._support_z(points, centre_xy)
+        # The table is a known, calibrated plane: a support measured on it (within
+        # depth noise) is taken as exactly the table, so table-top detection is
+        # unchanged by the measurement -- 0.3mm of measured z moved enough planner
+        # targets to flip 3 of the 20 randomized acceptance trials (2026-09-25).
+        if support_z is None or abs(support_z - TABLE_TOP_Z) < TABLE_SNAP_M:
+            support_z = TABLE_TOP_Z
+        centre_z = support_z + OBJECT_HALF_HEIGHT
+        lid_z = support_z + 2.0 * OBJECT_HALF_HEIGHT
+        lid_xy = self._lid_centre(data, depth, rows, columns, points, valid, r0, c0, lid_z)
         if lid_xy is not None:
             centre_xy = lid_xy
         pos_world = np.array([centre_xy[0], centre_xy[1], centre_z])
