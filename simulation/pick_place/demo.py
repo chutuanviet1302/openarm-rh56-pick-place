@@ -291,7 +291,7 @@ class Demo:
         self.log.note(f"proof lift: hand {hand_rise*100:+.1f}cm, object {rise*100:+.1f}cm (slip {slip*1000:.0f}mm), tilt {tilt:.0f} degrees")
         if hand_rise < C.PROOF_LIFT_MIN_HAND_RISE:
             raise RuntimeError(f"proof lift did not happen: hand rose only {hand_rise*100:.1f}cm")
-        if slip > C.PROOF_LIFT_MAX_SLIP or tilt > C.PROOF_LIFT_MAX_TILT_DEG:
+        if slip > C.PROOF_LIFT_SLIP_LIMIT[side] or tilt > C.PROOF_LIFT_TILT_LIMIT_DEG[side]:
             raise RuntimeError(
                 f"grasp failed: object did not come with the hand (hand +{hand_rise*100:.1f}cm, "
                 f"object +{rise*100:.1f}cm, slip {slip*1000:.0f}mm, tilt {tilt:.0f}deg); forces {forces}"
