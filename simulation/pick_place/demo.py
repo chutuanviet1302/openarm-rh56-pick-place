@@ -196,7 +196,12 @@ class Demo:
             ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
             return
         here = self.data.ctrl[scene.arm_actuators[side]].copy()
-        start = scene.wrist_position(side)
+        # Start the line where the arm is *commanded* to be (as Executor.descend_until
+        # does): under the can's load the measured wrist sags a few mm below it, and a
+        # line starting there pulled the hand back down as the lift began -- the grip
+        # went to 0N at that instant and the can slid out on the way up (pick
+        # (0.28,-0.265), centre basket, 2026-09-25).
+        start = scene.wrist_position_at(side, here)
         target = plan.centers["lift"].copy()
         target[:2] = start[:2]
         try:
@@ -301,9 +306,18 @@ class Demo:
         # (middle at 3-4N, default perception layout) let go when the arm stopped at
         # the top of the lift (2026-09-24). Fingers already on the can only; the
         # thumb is left alone (it already presses hardest, squeezing it turns the can).
+        # Forces averaged over a short hold: the contacts chatter, and a single sample
+        # taken the instant the proof lift stopped read ~0N on every finger (pick
+        # (0.28,-0.265), 2026-09-25), so no finger was re-gripped -- the index at 3.9N
+        # just before -- and the can slid out on the way to the basket.
+        samples = []
+        for _ in range(C.REGRIP_SAMPLES):
+            ex.hold(C.REGRIP_SAMPLE_SECONDS / C.REGRIP_SAMPLES)
+            samples.append(scene.finger_contact_forces(side))
+        mean_force = {name: float(np.mean([s[name] for s in samples])) for name in samples[0]}
         on_can = tuple(
-            name for name, force in scene.finger_contact_forces(side).items()
-            if 0.5 < force < C.REGRIP_BELOW_N and name != "thumb"
+            name for name, force in mean_force.items()
+            if 0.5 < force < C.REGRIP_BELOW_N[side] and name != "thumb"
         )
         if on_can:
             forces = ex.close_until_contact(side, on_can)

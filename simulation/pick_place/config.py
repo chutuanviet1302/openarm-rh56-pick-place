@@ -220,8 +220,15 @@ PROOF_LIFT_TILT_LIMIT_DEG = {"left": 11.0, "right": PROOF_LIFT_MAX_TILT_DEG}
 # presses hard enough, so it settles ON the surface instead of being driven through it.
 CONTACT_FORCE_TARGET_N = 8.0
 # Re-grip after the proof lift: fingers on the can below this force close again
-# (Demo.phase_grasp); 0 disables it.
-REGRIP_BELOW_N = 5.0
+# (Demo.phase_grasp); 0 disables it. Per hand, 2026-09-25 (centre basket, pick
+# +-1.5cm): right at 5N let fingers at 5-8N stay as they were and the grip chattered
+# to 0N on the lift, dropping the can in transfer at two pick offsets; 8N (the
+# closing target) held both. Left at 8N squeezed a 7N finger on the retrieval, the
+# can tilted 7deg in the hand and fell over when set down; left stays at 5N.
+REGRIP_BELOW_N = {"left": 5.0, "right": 8.0}
+# ... judged on forces averaged over this hold, sampled this many times.
+REGRIP_SAMPLE_SECONDS = 0.1
+REGRIP_SAMPLES = 10
 # Minimum normal force for a finger to count as "pressing" before the lift.
 GRASP_SECURE_MIN_FORCE_N = 0.5
 GRASP_SECURE_MIN_THUMB_FORCE_N = 6.0  # secure grasps measured 9-24N on the thumb
