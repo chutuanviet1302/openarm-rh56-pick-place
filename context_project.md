@@ -470,4 +470,15 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 - Chạy lại trên code hiện tại: **6/8**. Hỏng (0.28,-0.235): tay trái nâng thử trượt 8 mm, nghiêng 14° (vẫn dưới ngưỡng cũ 10 mm/15°) -> siết lại mọi ngón 0 N, lon tuột về rổ. (0.265,-0.235) đạt nhưng lệch 31.4 mm (cùng dấu hiệu trượt 9 mm/13°).
 - **Sửa:** ngưỡng nâng thử theo từng tay `PROOF_LIFT_SLIP_LIMIT` / `PROOF_LIFT_TILT_LIMIT_DEG` (config.py, dùng trong `Demo.phase_grasp`): trái 6 mm / 11° (lần nắm giữ được: <= 4 mm / 9°), phải giữ 10 mm / 15° (tay phải nâng thử trượt 7 mm vẫn mang tốt). Vượt ngưỡng -> thả ra, nắm lại hướng khác (cơ chế retry sẵn có).
 - **Sau sửa: 7/8** + danh nghĩa đạt (2.6 mm). (0.28,-0.235): 2.9 mm, (0.265,-0.235): 8.0 mm — cả hai tay trái nắm lại 1 lần (lần 2 trượt 1–2 mm, nghiêng 4°), thêm ~20 s mô phỏng. Test 61/61 OK.
-- **Còn hỏng:** (0.28,-0.265) — tay phải làm rơi lon khi mang sang rổ dù nâng thử tốt (ngón cái 20 N, trượt 2 mm). Việc tiếp theo: log lực từng ngón suốt pha mang để xem lực kẹp tụt ở đâu.
+- ~~Còn hỏng: (0.28,-0.265) — tay phải làm rơi lon khi mang~~ -> đã sửa, xem mục dưới.
+
+### 25/09/2026 — sửa tay phải làm rơi lon khi mang: lệch ±1.5 cm **8/8** (+ danh nghĩa = 9/9)
+
+- **Đo (log lực từng ngón mỗi 0.1 s):** lon không rơi vì nắm sai mà vì lực kẹp chập chờn khi nâng thẳng lên sau nâng thử (12 N -> 1.5 N -> 12 N, chu kỳ ~0.2 s); lon tụt dần 12–17 mm trong tay rồi rơi ở đầu đoạn mang. Lệnh ngón đứng yên, vị trí ngón nhích tới đúng lệnh -> lực về 0 (servo vị trí: lực = phần lệnh vượt quá bề mặt lon).
+- **Sửa (3 chỗ):**
+  1. `Demo.lift_straight_up` bắt đầu đường thẳng từ cổ tay *được ra lệnh* (`wrist_position_at(ctrl)`) thay vì cổ tay *đo được* (lún vài mm dưới tải) — cùng loại lỗi với cú giật đã sửa ở `Executor.follow`/`descend_until`; trước đó đầu đoạn nâng kéo tay xuống, lực về 0 đúng lúc đó.
+  2. Siết lại sau nâng thử đọc lực **trung bình 0.1 s / 10 mẫu** (`REGRIP_SAMPLE_SECONDS`, `REGRIP_SAMPLES`) thay vì 1 thời điểm (thời điểm đó đọc ~0 N mọi ngón -> không ngón nào được siết).
+  3. `REGRIP_BELOW_N` theo từng tay: **phải 8 N** (bằng lực mục tiêu kẹp; 5 N để các ngón 5–8 N chập chờn), **trái 5 N** (thử 8 N: ngón giữa 7.2 N bị siết thêm, lon nghiêng 7° trong tay rồi đổ khi đặt ra).
+- **Kết quả theo từng bước** (8 điểm lệch + danh nghĩa): trước sửa 8/9 -> sửa 1: 8/9 (ca hỏng dời sang (0.265,-0.265)) -> +sửa 2: 8/9 -> ngưỡng 8 N cả hai tay: 8/9 (tay trái làm đổ lon ở (0.265,-0.25)) -> **ngưỡng theo tay: 9/9**, sai số 0.6–7.7 mm. Mỗi điểm chạy 1 lần.
+- **Kiểm chứng:** chỉ test nhanh `tests.test_mujoco` 17/17 OK — **chưa chạy toàn bộ suite** (~25 phút) sau các sửa này; bước siết lại dùng cho mọi bài của cả hai tay nên cần chạy full suite lần tới.
+- **Rủi ro còn lại:** lực kẹp vẫn chập chờn khi nâng — sửa này làm tay đủ chắc để vượt qua, chưa khử gốc (tiếp xúc ngón–lon trong mô phỏng / hệ số servo ngón).
