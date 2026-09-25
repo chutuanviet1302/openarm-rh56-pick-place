@@ -26,3 +26,6 @@ artifacts/joint_logs/
 
 # Local config of another tool (Freebuff), not part of the project
 .freebuff/
+
+# Technical report outputs (md/docx/pdf/tex + figures, several MB), kept locally only
+report/
