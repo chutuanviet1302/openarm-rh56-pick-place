@@ -6,8 +6,6 @@ import time
 from pathlib import Path
 from typing import Callable, Protocol
 
-import numpy as np
-
 from .models import GraspConfig, ObjectPose, Pose, TrialResult, Workspace
 from .motion import pick_place_waypoints, validate_target
 

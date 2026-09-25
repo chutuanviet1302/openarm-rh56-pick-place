@@ -490,3 +490,10 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 - `Executor._render/think`: bộ ghi khung hình (`realtime = False`) không bị đồng bộ theo thời gian thực và chạy planner trên luồng chính; cửa sổ thật giữ hành vi cũ.
 - Ca (0.265,-0.265): tính trước 123 s, phát lại 64.1 s mượt (người dùng xác nhận), thành công, sai số 4.2 mm, nghiêng 0°. `tests.test_mujoco` 17/17 OK.
 - Lệnh: `python -m scripts.view_retrieve --place-arm right --retrieve-arm left --pick 0.28 -0.25 --basket 0.28 0.0 --retrieve-to 0.28 0.25 --platform 0.10`
+
+### 25/09/2026 — dọn dẹp codebase
+
+- **Code chết đã xoá:** `Demo._fingers_not_pressing`, `_finger_contact_forces`, `_phase_centers` (alias cũ, không ai gọi; giữ `_right_grasp_is_secure`, `_solve_poses` vì test còn dùng), import `PHASE_ORDER` thừa (`demo.py`); `Scene.contact_groups` (`scene.py`); import `numpy` thừa (`openarm_pick_place/pipeline.py`), `time` thừa (`ros2_nodes.py`). Test nhanh 38/38 OK (test_mujoco, test_mvp, test_mujoco_bridge, test_manipulation_protocol).
+- **Output cũ (không trong git) -> Thùng rác Windows (khôi phục được):** 47 mục — file nháp (`planner_head.py`, `test_head.py`, `centre-basket-rerun-sheet.html` + ảnh), ~36 JSON/log/PNG thí nghiệm đã bỏ (`human_elbow_*`, `floor_top_grasp_*`, `retreat*`, `full_suite.log`…), 7 episode không còn tài liệu nào nhắc (`centre-basket-rerun`, `retrieve-basket-middle`, `right-to-centre`, `web-20260921-*`); `episodes/index.json` còn 3 episode. `artifacts/` 406 -> 317 MB. Xoá thư mục trống `logs/`.
+- **Giữ lại:** `joint_logs/` (232 MB, tài liệu + báo cáo jerk dùng), `benchmarks/`, ảnh/JSON còn được nhắc tới, các script khảo sát (`sweep_*`, `check_handoff_geometry`), `transform_object_pose` + entry point ROS 2 (cho robot thật).
+- `.freebuff/` (cấu hình công cụ khác) thêm vào `.gitignore`. Còn treo: submodule `assets/rh56_controller` có sửa đổi chưa rõ nguồn (`inspire_left.xml`, xem mục 23/09 chiều).

@@ -17,7 +17,7 @@ from simulation.pick_place import config as C
 from simulation.pick_place.episode import EpisodeLog, TrialResult
 from simulation.pick_place.executor import Executor
 from simulation.pick_place.kinematics import upright_tilt_degrees
-from simulation.pick_place.planner import PHASE_ORDER, GraspPlanner, Plan
+from simulation.pick_place.planner import GraspPlanner, Plan
 from simulation.pick_place.scene import Scene
 from simulation.vision_detector import VisionDetector
 
@@ -668,18 +668,9 @@ class Demo:
     def _right_grasp_is_secure(self) -> bool:
         return self.grasp_is_secure()
 
-    def _fingers_not_pressing(self) -> list[str]:
-        return self.fingers_not_pressing()
-
-    def _finger_contact_forces(self, side: str) -> dict[str, float]:
-        return self.scene.finger_contact_forces(side)
-
     def _solve_poses(self) -> dict[str, dict[str, np.ndarray]]:
         self.plan = self.planner.plan(self.object_position())
         return {self.side: {**self.plan.joints, **{f"{k}_path": v for k, v in self.plan.paths.items()}}}
-
-    def _phase_centers(self, place_yaw_deg: float = 0.0) -> dict[str, np.ndarray]:
-        return self.planner.centers(self.object_position(), place_yaw_deg)
 
 
 # ---------------------------------------------------------------------- trials / layouts
