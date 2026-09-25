@@ -40,8 +40,27 @@ def sample_picks(n: int, radius: float, seed: int) -> list[tuple[float, float]]:
 
 
 def run_one(index: int, pick: tuple[float, float], perception: bool) -> dict:
+    from simulation.pick_place import executor as executor_module
     from simulation.pick_place.retrieve import RetrieveDemo, run_retrieve_trial
 
+    # Torque saturation: per arm joint, the share of physics steps spent at the
+    # actuator's force limit (a motor that cannot hold its commanded pose).
+    saturated: dict[str, int] = {}
+    steps = [0]
+    original_step = executor_module.Executor._step
+
+    def step(self) -> None:
+        original_step(self)
+        steps[0] += 1
+        model, data = self.model, self.data
+        for actuator in range(model.nu):
+            name = model.actuator(actuator).name or ""
+            if name.startswith(("left_joint", "right_joint")):
+                if abs(data.actuator_force[actuator]) >= 0.99 * model.actuator_forcerange[actuator, 1]:
+                    key = name.replace("_ctrl", "")
+                    saturated[key] = saturated.get(key, 0) + 1
+
+    executor_module.Executor._step = step
     started = time.perf_counter()
     log = io.StringIO()
     record = {"index": index, "pick": [float(v) for v in pick]}
@@ -63,6 +82,7 @@ def run_one(index: int, pick: tuple[float, float], perception: bool) -> dict:
     record["grasp_attempts"] = text.count("GRASP")
     record["regrasps"] = text.count("rejected")
     record["perception_notes"] = [line.strip() for line in text.splitlines() if "object seen at" in line]
+    record["torque_saturation_pct"] = {k: round(100.0 * v / max(steps[0], 1), 2) for k, v in sorted(saturated.items())}
     record["wall_s"] = round(time.perf_counter() - started)
     return record
 

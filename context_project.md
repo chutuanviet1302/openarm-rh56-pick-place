@@ -507,3 +507,10 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 - **Rổ giữa bàn có camera, 40 điểm: 35/40 (87,5%)**; nhận diện trung vị 1,6 mm, max 2,8 mm (88 lần); sai số đặt trung vị 4,1 mm. 5 ca hỏng đều do cú nắm (2 tay phải rơi lon khi mang, 3 lon đổ 90° khi đặt), không do camera.
 - **Toàn bộ test (code cuối): 61/61 OK.**
 - **Điểm yếu thật còn lại:** độ chắc cú nắm (~10% hỏng). Việc tiếp theo: đặt giới hạn lực servo theo motor thật (DM8009 ±40, DM4340 ±27, DM4310 ±7 N·m) và đo lại.
+
+### 25/09/2026 (tối) — việc 7: giới hạn mômen cánh tay theo motor thật
+
+- `five_finger_model.ARM_MOTOR_TORQUE_LIMIT_NM`: khớp 1–2 DM8009 ±40, khớp 3–4 DM4340 ±27, khớp 5–7 DM4310 ±7 N·m (theo `openarm_bimanual.xml` của vendor); trước đó ±120 N·m cho mọi khớp. Giữ nguyên kp=800/kv=12.
+- Log khớp bài rổ giữa bàn (trước khi đổi): mômen đỉnh chưa bao giờ vượt giới hạn thật — lớn nhất khớp 2 phải 10,5/40; sát nhất khớp 6 phải 6,5/7 N·m (93%).
+- Đo lại sau khi đổi: rổ giữa bàn 40 điểm **36/40, giống hệt từng lần chạy** so với trước (cùng ca hỏng, cùng sai số); **0 bước mô phỏng nào chạm trần mômen** (đo bằng `torque_saturation_pct` mới trong `scripts/sweep_centre_basket.py`); nghiệm thu 20 bài 19/20 (cùng bài 19 hỏng). Toàn bộ test 61/61 OK.
+- **Kết luận:** lo ngại "servo mô phỏng mạnh gấp 3 lần thật" không ảnh hưởng tới bài này — cánh tay chưa lần nào cần hơn lực motor thật. Các lỗi còn lại (~10%) nằm ở bàn tay / cú nắm. Chưa đối chiếu: damping/friction khớp (vendor 0,4/0,1), giới hạn vận tốc motor, hệ số PD của driver thật.

@@ -509,16 +509,25 @@ def build_five_finger_model(
     return model
 
 
+# Peak torque of the real OpenArm v1 joint motors (vendor openarm_bimanual.xml):
+# DM8009 on joints 1-2, DM4340 on joints 3-4, DM4310 on joints 5-7. The servos used
+# to be capped at 120 N*m on every joint, 3-17x what the motors can give.
+ARM_MOTOR_TORQUE_LIMIT_NM = {1: 40.0, 2: 40.0, 3: 27.0, 4: 27.0, 5: 7.0, 6: 7.0, 7: 7.0}
+
+
 def _stiffen_arm_actuators(model: mujoco.MjModel) -> None:
-    """Keep planned 7-DOF poses under the added Inspire-hand payload."""
+    """Keep planned 7-DOF poses under the added Inspire-hand payload, within the
+    torque the real joint motors can deliver."""
     for actuator in range(model.nu):
         name = model.actuator(actuator).name or ""
         if not name.startswith(("left_joint", "right_joint")):
             continue
+        joint = int(name.split("joint")[1][0])
+        limit = ARM_MOTOR_TORQUE_LIMIT_NM[joint]
         model.actuator_gainprm[actuator, 0] = 800.0
         model.actuator_biasprm[actuator, 1] = -800.0
         model.actuator_biasprm[actuator, 2] = -12.0
-        model.actuator_forcerange[actuator] = [-120.0, 120.0]
+        model.actuator_forcerange[actuator] = [-limit, limit]
 
 
 def _soften_finger_contacts(model: mujoco.MjModel) -> None:
