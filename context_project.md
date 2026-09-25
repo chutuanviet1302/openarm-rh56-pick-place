@@ -1,6 +1,6 @@
 # Context Project — OpenArm + Inspire RH56 + D435 Pick & Place
 
-Cập nhật: 2026-09-23 (task rổ giữa bàn hai tay; trước đó 2026-09-21 Stage 1/2). File này tóm tắt project cho phiên làm việc mới (người hoặc AI) đọc để nắm ngữ cảnh nhanh, không cần đọc lại toàn bộ lịch sử commit/chat.
+Cập nhật: 2026-09-25 (kiểm tra lại rổ giữa bàn + giật, xem mục cuối; 2026-09-23 task rổ giữa bàn hai tay; trước đó 2026-09-21 Stage 1/2). File này tóm tắt project cho phiên làm việc mới (người hoặc AI) đọc để nắm ngữ cảnh nhanh, không cần đọc lại toàn bộ lịch sử commit/chat.
 
 **Đọc mục 0 trước** — đó là trạng thái mới nhất và việc đang dở; mục 1–8 bên dưới là bối cảnh nền, một số con số đã lỗi thời (đánh dấu ở từng chỗ).
 
@@ -448,3 +448,19 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 - Bài chính chạy lại trên MuJoCo sau khi sửa giật: thành công, lệch 2.1 mm, nghiêng 0°, không va chạm; phím R phát lại mượt.
 - Log khớp cho PlotJuggler: `artifacts/joint_logs/retrieve_headless.csv` (trước sửa) và `retrieve_headless_fixed.csv` (sau sửa), ~60 MB mỗi file, không đưa lên git. Máy chưa cài PlotJuggler — cần cài (bản Windows từ GitHub Releases) để xem.
 - Việc tiếp theo: xem log trên PlotJuggler cùng mentor; nâng độ chắc tay phải ở điểm nắm (0.28,-0.235); giảm số lần tay trái phải nắm lại.
+
+## 24/09/2026 (tối) — vì sao tay trái phải nắm lại lần 2
+
+- **Ngón cái không mở (đã sửa):** ở tư thế nghỉ bàn tay nắm lại, ngón cái đối diện và gập ngang qua ngón trỏ; lệnh mở ngón cái tại chỗ làm nó kẹt vào ngón trỏ (khớp gập ở 0.38 dù lệnh 0.0), tay tới lon với ngón cái trên nắp lon -> hỏng, phải nắm lại.
+  - Cách sửa **đang có trong code** (khác bản nháp "mở tay 2 bước"): tay trái nghỉ với ngón cái xoay ra ngoài (`REST_THUMB_UNOPPOSED = {left: True}`, `Scene.rest_hand` thay `closed_hand` ở tư thế nghỉ/lúc thu tay) nên không còn kẹt; ngón cái trái gập sẵn theo `GRASP_CLOSURE_FRACTION` như planner giả định (`PRESHAPE_THUMB_MATCH_PLAN`). Mở 2 bước (`PRESHAPE_THUMB_STAGED`) **tắt cho cả hai tay**: bật cho tay phải làm hỏng 3/20 bài ngẫu nhiên có camera (lon rơi khi mang).
+  - Nắm xiên có hệ số lệch riêng (`OBLIQUE_GRASP_HEIGHT_BIAS`, `OBLIQUE_JAW_BIAS_TOWARD_FINGERS`, dùng qua `GraspPlanner.grasp_tilt`): hệ số của nắm từ trên xuống đặt đầu ngón tay trái ngang nắp lon.
+- ~~Còn mở: lần nắm đầu tay trái hỏng vì ngón cái chạm lon~~ -> không còn thấy: kiểm tra 25/09 tay trái nắm được ngay lần đầu (hướng -60°).
+- **Chưa mượt khi xem trực tiếp:** do (1) các lần planner tính (robot đứng yên vài giây) và (2) mỗi lần nắm hỏng phải thả ra – tính lại – nắm lại. Phím R phát lại mượt; (2) đã hết ở kiểm tra 25/09.
+
+## 25/09/2026 — kiểm tra lại bài rổ giữa bàn + giật (PlotJuggler log)
+
+- Bài chính (pick (0.28,-0.25) -> rổ (0.28,0) bệ 10 cm -> đặt (0.28,0.25)): **2/2 PASS**, sai số 2.6 mm, nghiêng cuối 0°, **mỗi tay nắm 1 lần, không nắm lại**; thời gian mô phỏng 90 s -> 63 s.
+- Log `artifacts/joint_logs/check_20260925.csv` (không đưa lên git), 14 khớp: vận tốc lệnh > 69 °/s **0** mẫu (max 64.5 °/s); mômen nhảy > 3 N·m/2 ms **0** lần. Bước mômen lớn nhất 2.05 N·m (phải j6, t=22.12 s, pha thả) có lệnh khớp đứng yên -> do ngón nhả lon đổi tải cổ tay, không phải lệnh giật. **Không còn giật do lệnh.**
+- Vật lý nhanh 3× thời gian thực; "khựng" khi xem trực tiếp là planner tính (tổng 57.6 s ≈ 60% thời gian xem).
+- Test: toàn bộ suite 60/61, test duy nhất fail đã sửa và chạy riêng OK (`test_demo_starts_in_symmetric_ready_pose_with_both_hands_closed` giờ so với `rest_hand`; trước đó so với `closed_hand` nên fail khi tay trái nghỉ với ngón cái xoay ra).
+- **Còn yếu:** tay trái sau siết lại chỉ còn ngón cái 9.0 N + trỏ 8.6 N (giữa/áp út/út 0 N), trượt 4 mm, nghiêng 9° lúc nâng thử; lon nghiêng tới 21° trong tay phải lúc mang (log 24/09 cũng 17.7°) rồi vẫn đặt thẳng. Chưa chạy lại phép lệch điểm nắm ±1.5 cm (lần trước 7/8). Máy chưa cài PlotJuggler (phân tích trực tiếp từ CSV).
