@@ -23,3 +23,6 @@ artifacts/episodes/
 
 # Joint-state logs for PlotJuggler (scripts/log_joint_states.py), ~60MB each
 artifacts/joint_logs/
+
+# Local config of another tool (Freebuff), not part of the project
+.freebuff/

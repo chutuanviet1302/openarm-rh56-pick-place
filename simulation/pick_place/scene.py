@@ -430,15 +430,3 @@ class Scene:
             if {contact.geom1, contact.geom2} == {self.object_geom, other} and float(contact.dist) < 0.001:
                 return True
         return False
-
-    def contact_groups(self, side: str) -> set[str]:
-        """{'thumb', 'fingers'} subsets currently touching the object: the hand as a two-jaw gripper."""
-        groups: set[str] = set()
-        for contact in self.data.contact[: self.data.ncon]:
-            if self.object_geom not in (contact.geom1, contact.geom2):
-                continue
-            other = contact.geom2 if contact.geom1 == self.object_geom else contact.geom1
-            finger = self.finger_of(other, side)
-            if finger is not None:
-                groups.add("thumb" if finger == "thumb" else "fingers")
-        return groups
