@@ -463,4 +463,11 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 - Log `artifacts/joint_logs/check_20260925.csv` (không đưa lên git), 14 khớp: vận tốc lệnh > 69 °/s **0** mẫu (max 64.5 °/s); mômen nhảy > 3 N·m/2 ms **0** lần. Bước mômen lớn nhất 2.05 N·m (phải j6, t=22.12 s, pha thả) có lệnh khớp đứng yên -> do ngón nhả lon đổi tải cổ tay, không phải lệnh giật. **Không còn giật do lệnh.**
 - Vật lý nhanh 3× thời gian thực; "khựng" khi xem trực tiếp là planner tính (tổng 57.6 s ≈ 60% thời gian xem).
 - Test: toàn bộ suite 60/61, test duy nhất fail đã sửa và chạy riêng OK (`test_demo_starts_in_symmetric_ready_pose_with_both_hands_closed` giờ so với `rest_hand`; trước đó so với `closed_hand` nên fail khi tay trái nghỉ với ngón cái xoay ra).
-- **Còn yếu:** tay trái sau siết lại chỉ còn ngón cái 9.0 N + trỏ 8.6 N (giữa/áp út/út 0 N), trượt 4 mm, nghiêng 9° lúc nâng thử; lon nghiêng tới 21° trong tay phải lúc mang (log 24/09 cũng 17.7°) rồi vẫn đặt thẳng. Chưa chạy lại phép lệch điểm nắm ±1.5 cm (lần trước 7/8). Máy chưa cài PlotJuggler (phân tích trực tiếp từ CSV).
+- **Còn yếu:** tay trái sau siết lại chỉ còn ngón cái 9.0 N + trỏ 8.6 N (giữa/áp út/út 0 N), trượt 4 mm, nghiêng 9° lúc nâng thử; lon nghiêng tới 21° trong tay phải lúc mang (log 24/09 cũng 17.7°) rồi vẫn đặt thẳng. Máy chưa cài PlotJuggler (phân tích trực tiếp từ CSV).
+
+### 25/09/2026 — lệch điểm nắm ±1.5 cm (8 hướng quanh (0.28,-0.25))
+
+- Chạy lại trên code hiện tại: **6/8**. Hỏng (0.28,-0.235): tay trái nâng thử trượt 8 mm, nghiêng 14° (vẫn dưới ngưỡng cũ 10 mm/15°) -> siết lại mọi ngón 0 N, lon tuột về rổ. (0.265,-0.235) đạt nhưng lệch 31.4 mm (cùng dấu hiệu trượt 9 mm/13°).
+- **Sửa:** ngưỡng nâng thử theo từng tay `PROOF_LIFT_SLIP_LIMIT` / `PROOF_LIFT_TILT_LIMIT_DEG` (config.py, dùng trong `Demo.phase_grasp`): trái 6 mm / 11° (lần nắm giữ được: <= 4 mm / 9°), phải giữ 10 mm / 15° (tay phải nâng thử trượt 7 mm vẫn mang tốt). Vượt ngưỡng -> thả ra, nắm lại hướng khác (cơ chế retry sẵn có).
+- **Sau sửa: 7/8** + danh nghĩa đạt (2.6 mm). (0.28,-0.235): 2.9 mm, (0.265,-0.235): 8.0 mm — cả hai tay trái nắm lại 1 lần (lần 2 trượt 1–2 mm, nghiêng 4°), thêm ~20 s mô phỏng. Test 61/61 OK.
+- **Còn hỏng:** (0.28,-0.265) — tay phải làm rơi lon khi mang sang rổ dù nâng thử tốt (ngón cái 20 N, trượt 2 mm). Việc tiếp theo: log lực từng ngón suốt pha mang để xem lực kẹp tụt ở đâu.

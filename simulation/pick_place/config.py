@@ -207,6 +207,12 @@ PROOF_LIFT_MIN_HAND_RISE = 0.03
 # hand" is a statement about slip, not about an absolute height.
 PROOF_LIFT_MAX_SLIP = 0.01
 PROOF_LIFT_MAX_TILT_DEG = 15.0
+# Per-hand proof-lift limits (Demo.phase_grasp). Left is stricter: lifting the can out
+# of the centre basket (pick offset +-1.5cm, 2026-09-25) it passed at slip 8-9mm /
+# tilt 13-14deg and then slid out of the hand (every finger 0N at the re-grip), while
+# left grasps that held showed <= 4mm / 9deg. Right proof lifts up to 7mm carried fine.
+PROOF_LIFT_SLIP_LIMIT = {"left": 0.006, "right": PROOF_LIFT_MAX_SLIP}
+PROOF_LIFT_TILT_LIMIT_DEG = {"left": 11.0, "right": PROOF_LIFT_MAX_TILT_DEG}
 
 # --------------------------------------------------------------------------- finger closing
 # Adaptive closing after correlllab/rh56_controller (grasp_executor._adaptive_force_phase):
