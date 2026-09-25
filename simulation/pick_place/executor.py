@@ -193,9 +193,26 @@ class Executor:
         travels (rh56_controller's thumb-reflex ordering), so the hand arrives straddling
         the object."""
         scene = self.scene
+        # Two stages, as the release does in reverse: swing the thumb out of
+        # opposition while everything straightens, then back into opposition once it
+        # is free. In the resting fist the thumb is opposed and folded across the
+        # index finger; opening it in place left it hooked there (left hand: flexion
+        # stuck at 0.38 with a 0.0 command for the whole reach), so it arrived over
+        # the can's lid, closed onto the index finger, and the grasp had to be redone
+        # (2026-09-24). The re-grasp, after a release that had swung it out, opened
+        # it fully (0.0).
+        yaw_actuator, unopposed, opposed = scene.thumb_yaw[side]
         for name, actuator in scene.finger_actuator[side].items():
             self.data.ctrl[actuator] = scene.open_ctrl[side][name]
-        yaw_actuator, _, opposed = scene.thumb_yaw[side]
+        if C.PRESHAPE_THUMB_MATCH_PLAN[side]:
+            # The planner places the jaw with the thumb pre-flexed by
+            # GRASP_CLOSURE_FRACTION (Scene.jaw_offsets_at); give the hand that shape.
+            thumb = scene.finger_actuator[side]["thumb"]
+            opened, closed = scene.open_ctrl[side]["thumb"], scene.closed_ctrl[side]["thumb"]
+            self.data.ctrl[thumb] = opened + C.GRASP_CLOSURE_FRACTION * (closed - opened)
+        if C.PRESHAPE_THUMB_STAGED[side]:
+            self.data.ctrl[yaw_actuator] = unopposed
+            self.hold(C.PRESHAPE_THUMB_OPEN_SECONDS)
         self.data.ctrl[yaw_actuator] = opposed
 
     def open_fingers(self, side: str, fingers: tuple[str, ...], seconds: float, release_thumb_yaw: bool = False) -> None:

@@ -561,7 +561,7 @@ class Demo:
         self.log.record("release_lateral_drift_m", float(np.linalg.norm((object_after_retreat - object_before)[:2])))
         ex.open_fingers(side, ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
         # Continue home after clearing the basket.
-        ex.move_to({arm: plan["hover"], hand: scene.closed_hand[side]}, C.RETURN_SECONDS)
+        ex.move_to({arm: plan["hover"], hand: scene.rest_hand[side]}, C.RETURN_SECONDS)
         # Back the way it came, via a raise point re-chosen now that the object stands
         # in the basket, so the hand never sweeps low over the basket or the object.
         try:
@@ -629,7 +629,7 @@ class Demo:
             ex.move_to({hand: self.light_grip_ctrl}, C.RELAX_GRIP_SECONDS)
         ex.move_to({hand: scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS), arm: plan["hover"]}, C.RETREAT_SECONDS)
         ex.open_fingers(side, ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
-        ex.move_to({hand: scene.closed_hand[side]}, 0.5 * C.RELEASE_SECONDS)
+        ex.move_to({hand: scene.rest_hand[side]}, 0.5 * C.RELEASE_SECONDS)
         raise_joints, _ = ex.think(self.planner.find_raise, plan["hover"], plan.centers["hover"])
         ex.move_to({arm: raise_joints}, C.RETURN_SECONDS)
         ex.move_to({arm: scene.attention_pose[side]}, C.RETURN_SECONDS)

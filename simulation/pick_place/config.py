@@ -94,6 +94,9 @@ GRASP_HEIGHT_BIAS = 0.04
 JAW_AXIS_BIAS = -0.011
 # 0 sits the wrist at the jaw midpoint, 0.5 puts the fingers themselves on the object.
 JAW_BIAS_TOWARD_FINGERS = {"right": 0.0, "left": 0.30}
+# Same two biases for oblique grasps (GraspPlanner.centers).
+OBLIQUE_GRASP_HEIGHT_BIAS = 0.04
+OBLIQUE_JAW_BIAS_TOWARD_FINGERS = 0.0
 GRASP_POSITION_CORRECTION = np.array([0.0, 0.0, 0.0])
 # Standoff opposite the fingers' full 3-D pointing direction.
 APPROACH_STANDOFF = 0.08
@@ -245,6 +248,20 @@ MOVE_TO_RAISE = 1.0
 MOVE_TO_HOVER = 1.2
 MOVE_TO_READY = 0.8
 PRESHAPE_SETTLE = 0.3
+# Thumb straightens before it swings into opposition (Executor.preshape_hand).
+PRESHAPE_THUMB_OPEN_SECONDS = 0.4
+# Resting fist with the thumb out of opposition (Scene.rest_hand): left only -- the
+# opposed left thumb folds across the index finger and hooked on it when opening.
+REST_THUMB_UNOPPOSED = {"left": True, "right": False}
+# Left hand only: its resting thumb hooks under the index finger and stayed at 0.38
+# with an open command; the right thumb opens freely (0.1), and staging it there
+# cost 3/20 randomized RGB-D trials (can dropped in transfer), 2026-09-24.
+PRESHAPE_THUMB_STAGED = {"left": False, "right": False}
+# Left thumb only: pre-flex it to the planner's GRASP_CLOSURE_FRACTION shape.
+# Measured 2026-09-24: left fully open tipped the can on the table (mirrored layout)
+# while the pre-flexed shape grasped first time in the centre-basket retrieval; on
+# the right hand the pre-flex cost a re-grasp and fully open is what works.
+PRESHAPE_THUMB_MATCH_PLAN = {"left": True, "right": False}
 MOVE_TO_PREGRASP = 1.2
 PREGRASP_SETTLE = 0.2
 MOVE_TO_GRASP = 1.0

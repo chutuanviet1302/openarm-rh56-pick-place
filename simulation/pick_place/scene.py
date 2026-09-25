@@ -32,6 +32,7 @@ from simulation.pick_place.config import (
     FINGER_NAMES,
     GRASP_CLOSURE_FRACTION,
     OBJECT_GEOM,
+    REST_THUMB_UNOPPOSED,
     TABLE_CONTACT_TOLERANCE,
 )
 from simulation.pick_place.kinematics import wrist_frame, hand_pose, natural_grasp_frame
@@ -65,8 +66,7 @@ class Scene:
         self.grasp_orientation = {
             side: natural_grasp_frame(self.model, side)[1] for side in ("left", "right")
         }
-        self._index_arms_and_hands()
-        self._index_fingers()
+        self._index_arms_and_hands()  # also indexes the fingers (rest hand needs them)
 
         self.bottle_qpos = int(self.model.joint(BOTTLE_JOINT).qposadr[0])
         self.bottle_dof = int(self.model.joint(BOTTLE_JOINT).dofadr[0])
@@ -122,6 +122,19 @@ class Scene:
             self.hand_dofs[side] = self.model.jnt_dofadr[hand_joints]
             self.open_hand[side] = open_targets
             self.closed_hand[side] = closed_targets
+        self._index_fingers()
+        # Resting hand: a fist, with the thumb swung out of opposition where
+        # REST_THUMB_UNOPPOSED says so. The left thumb, opposed in the fist, lies
+        # folded across the index finger and hooked on it when the hand opened
+        # (flexion stuck at 0.38 with an open command), so the left hand missed its
+        # first grasp and had to re-grasp (2026-09-24).
+        self.rest_hand = {}
+        for side in ("left", "right"):
+            rest = self.closed_hand[side].copy()
+            if REST_THUMB_UNOPPOSED[side]:
+                yaw_actuator, unopposed, _ = self.thumb_yaw[side]
+                rest[list(self.hand_actuators[side]).index(yaw_actuator)] = unopposed
+            self.rest_hand[side] = rest
 
     def _index_fingers(self) -> None:
         """Per-finger actuator ids and open/closed ctrl values, so the adaptive
@@ -216,8 +229,8 @@ class Scene:
         for side in ("left", "right"):
             self.data.qpos[self.arm_qpos[side]] = self.attention_pose[side]
             self.data.ctrl[self.arm_actuators[side]] = self.attention_pose[side]
-            self.data.qpos[self.hand_qpos[side]] = self.closed_hand[side]
-            self.data.ctrl[self.hand_actuators[side]] = self.closed_hand[side]
+            self.data.qpos[self.hand_qpos[side]] = self.rest_hand[side]
+            self.data.ctrl[self.hand_actuators[side]] = self.rest_hand[side]
         mujoco.mj_forward(self.model, self.data)
 
     # ------------------------------------------------------------------ groups

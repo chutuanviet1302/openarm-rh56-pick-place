@@ -249,7 +249,12 @@ class MujocoSmokeTests(unittest.TestCase):
         np.testing.assert_allclose(left[[0, 2]], right[[0, 2]], atol=0.01)
         self.assertAlmostEqual(left[1], -right[1], delta=0.01)
         for side in ("left", "right"):
-            np.testing.assert_allclose(demo.data.qpos[demo.hand_qpos[side]], demo.closed_hand[side])
+            np.testing.assert_allclose(demo.data.qpos[demo.hand_qpos[side]], demo.rest_hand[side])
+            # The resting fist is the closed hand; only the thumb yaw may be swung out
+            # of opposition (REST_THUMB_UNOPPOSED, left hand).
+            yaw_index = list(demo.hand_actuators[side]).index(demo.thumb_yaw[side][0])
+            fingers = np.delete(np.arange(len(demo.rest_hand[side])), yaw_index)
+            np.testing.assert_allclose(demo.rest_hand[side][fingers], demo.closed_hand[side][fingers])
 
 
 if __name__ == "__main__":

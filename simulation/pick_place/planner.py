@@ -76,6 +76,8 @@ class GraspPlanner:
         self.base_orientation = scene.grasp_orientation[side]
         # Orientation of the current plan: base turned by the chosen grasp yaw.
         self.orientation = self.base_orientation
+        # Oblique tilt of the heading being planned (None = reference grasp).
+        self.grasp_tilt: tuple[str, float] | None = None
         self._local_jaw: tuple[np.ndarray, np.ndarray] | None = None
 
     # ------------------------------------------------------------------ hand geometry
@@ -122,12 +124,20 @@ class GraspPlanner:
         jaw = 0.5 * (offset + thumb_offset)
         jaw_line = thumb_offset - offset
         jaw_axis = jaw_line / np.linalg.norm(jaw_line)
+        # The height and along-jaw biases were tuned for the steep top grasp (lift the
+        # grip so the fingertips clear the table; the left jaw shifted 30% toward the
+        # fingers). Applied to an oblique grasp they put the left hand's fingertips at
+        # the can's lid -- it closed above it and had to re-grasp (2026-09-24) -- so
+        # oblique grasps use their own values.
+        oblique = self.grasp_tilt is not None
+        height_bias = C.OBLIQUE_GRASP_HEIGHT_BIAS if oblique else C.GRASP_HEIGHT_BIAS
+        finger_bias = C.OBLIQUE_JAW_BIAS_TOWARD_FINGERS if oblique else C.JAW_BIAS_TOWARD_FINGERS[self.side]
         grasp = (
             bottle
             - jaw
             + C.JAW_AXIS_BIAS * jaw_axis
-            - C.JAW_BIAS_TOWARD_FINGERS[self.side] * jaw_line
-            + np.array([0.0, 0.0, C.GRASP_HEIGHT_BIAS])
+            - finger_bias * jaw_line
+            + np.array([0.0, 0.0, height_bias])
             + C.GRASP_POSITION_CORRECTION * np.array([1.0, 1.0 if self.side == "right" else -1.0, 1.0])
         )
         aperture = float(np.linalg.norm(jaw_line))
@@ -221,6 +231,7 @@ class GraspPlanner:
                     continue
                 label = f"grasp yaw {yaw:+.0f}" + (f" tilt {tilt[0]}{tilt[1]:+.0f}" if tilt else "")
                 self.orientation = rotation_z(yaw) @ self._tilted(tilt)
+                self.grasp_tilt = tilt
                 try:
                     plan = self._plan_pick(object_position)
                 except RuntimeError as error:
@@ -234,6 +245,7 @@ class GraspPlanner:
                     continue
                 return plan
         self.orientation = self.base_orientation
+        self.grasp_tilt = None
         raise RuntimeError("no reachable grasp at any hand yaw:\n  " + "\n  ".join(failures))
 
     def _grasp_tilts(self) -> list[tuple[int, tuple[str, float] | None]]:
@@ -274,6 +286,7 @@ class GraspPlanner:
     def plan_pick(self, object_position: np.ndarray) -> Plan:
         """Plan only through proof-lift; used by the bimanual route preflight."""
         failures = []
+        self.grasp_tilt = None
         for yaw in C.GRASP_YAW_CANDIDATES_DEG:
             self.orientation = rotation_z(yaw) @ self.base_orientation
             try:
@@ -767,7 +780,7 @@ class GraspPlanner:
         side = self.side
         data.qpos[scene.arm_qpos[side]] = arm_joints
         if closed:
-            data.qpos[scene.hand_qpos[side]] = scene.closed_hand[side]
+            data.qpos[scene.hand_qpos[side]] = scene.rest_hand[side]
         else:
             for name, actuator in scene.finger_actuator[side].items():
                 joint = model.actuator_trnid[actuator, 0]
