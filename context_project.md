@@ -427,7 +427,7 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 - Xem MuJoCo mượt hơn: planner chạy luồng phụ (cửa sổ không treo), cả bài 169 s -> 75 s; phím **R** phát lại lần chạy đã ghi, không có đoạn dừng.
 - Test: **61/61 OK** (lần chạy đầy đủ cuối, trước commit phím R — commit này chỉ sửa script xem).
 
-**Chạy để xem:**
+**Chạy để xem** (từ 25/09 mặc định tính trước rồi phát lại mượt, xem mục cuối):
 `python -m scripts.view_retrieve --place-arm right --retrieve-arm left --pick 0.28 -0.25 --basket 0.28 0.0 --retrieve-to 0.28 0.25 --platform 0.10`
 
 **Việc tiếp theo đề xuất:**
@@ -482,3 +482,11 @@ Bố trí xoay đế (-100°/+40°, tách 0.06 m) của buổi sáng KHÔNG kh�
 - **Kết quả theo từng bước** (8 điểm lệch + danh nghĩa): trước sửa 8/9 -> sửa 1: 8/9 (ca hỏng dời sang (0.265,-0.265)) -> +sửa 2: 8/9 -> ngưỡng 8 N cả hai tay: 8/9 (tay trái làm đổ lon ở (0.265,-0.25)) -> **ngưỡng theo tay: 9/9**, sai số 0.6–7.7 mm. Mỗi điểm chạy 1 lần.
 - **Kiểm chứng:** chỉ test nhanh `tests.test_mujoco` 17/17 OK — **chưa chạy toàn bộ suite** (~25 phút) sau các sửa này; bước siết lại dùng cho mọi bài của cả hai tay nên cần chạy full suite lần tới.
 - **Rủi ro còn lại:** lực kẹp vẫn chập chờn khi nâng — sửa này làm tay đủ chắc để vượt qua, chưa khử gốc (tiếp xúc ngón–lon trong mô phỏng / hệ số servo ngón).
+
+### 25/09/2026 — xem MuJoCo mượt: tính trước rồi phát lại
+
+- Lag khi xem có 2 nguồn đã đo: planner tính kế hoạch (robot đứng yên, tổng ~58 s/bài) và vật lý chia CPU với việc vẽ.
+- `scripts/view_retrieve.py` giờ mặc định **mô phỏng toàn bộ bài trước (không cửa sổ, không đồng bộ thời gian thực), rồi mở cửa sổ phát lại đúng tốc độ thực 60 khung hình/giây** (chỉ đặt tư thế, không tính vật lý). Cờ: `--speed 2` (phát nhanh), `--fps`, `--live` (chế độ cũ xem trực tiếp, có các đoạn dừng lúc planner tính). Phím R phát lại từ đầu.
+- `Executor._render/think`: bộ ghi khung hình (`realtime = False`) không bị đồng bộ theo thời gian thực và chạy planner trên luồng chính; cửa sổ thật giữ hành vi cũ.
+- Ca (0.265,-0.265): tính trước 123 s, phát lại 64.1 s mượt (người dùng xác nhận), thành công, sai số 4.2 mm, nghiêng 0°. `tests.test_mujoco` 17/17 OK.
+- Lệnh: `python -m scripts.view_retrieve --place-arm right --retrieve-arm left --pick 0.28 -0.25 --basket 0.28 0.0 --retrieve-to 0.28 0.25 --platform 0.10`
