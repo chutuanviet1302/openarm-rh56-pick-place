@@ -72,16 +72,20 @@ class Executor:
 
     def _render(self) -> None:
         """Redraw once per frame and pace to real time (sync + sleep after *every* 1ms
-        step ran at ~0.4x: viewer.sync() costs ~1ms and Windows cannot sleep < ~1.6ms)."""
+        step ran at ~0.4x: viewer.sync() costs ~1ms and Windows cannot sleep < ~1.6ms).
+        A viewer with `realtime = False` (an off-screen frame recorder) is not paced,
+        and may ask for its own `frame_seconds`."""
         if self.viewer is None:
             return
         now = time.perf_counter()
         sim_time = float(self.data.time)
         if self._wall_anchor is None:
             self._wall_anchor = now - sim_time
-        if sim_time - self._last_frame_time >= C.VIEWER_FRAME_SECONDS:
+        if sim_time - self._last_frame_time >= getattr(self.viewer, "frame_seconds", C.VIEWER_FRAME_SECONDS):
             self.viewer.sync()
             self._last_frame_time = sim_time
+            if not getattr(self.viewer, "realtime", True):
+                return
             now = time.perf_counter()
             ahead = self._wall_anchor + sim_time - now
             if ahead > 0.0:
@@ -94,7 +98,7 @@ class Executor:
         thread keeps redrawing, so the window stays live (camera, panels) instead of
         freezing for the seconds a plan takes. Physics does not advance meanwhile --
         the planner only reads the scene (it solves IK on its own MjData copies)."""
-        if self.viewer is None:
+        if self.viewer is None or not getattr(self.viewer, "realtime", True):
             return fn(*args, **kwargs)
         outcome: dict = {}
 
