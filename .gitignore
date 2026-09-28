@@ -29,3 +29,13 @@ artifacts/joint_logs/
 
 # Technical report outputs (md/docx/pdf/tex + figures, several MB), kept locally only
 report/
+
+# Run output of the 6D / multi-object / conveyor / bin tasks (regenerate with the
+# scripts): spawn checks, logs, exported FoundationPose frames, videos, recordings
+artifacts/day1_spawns/
+artifacts/day2/
+artifacts/fp_bin/
+artifacts/fp_eval/
+artifacts/fp_frames/
+artifacts/videos/
+artifacts/*.npz

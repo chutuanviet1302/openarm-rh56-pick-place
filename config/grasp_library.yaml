@@ -1,0 +1,138 @@
+# Grasp library: how the Inspire hand takes each object, per rest pose.
+#
+# Consumed by simulation/pick_place/grasp_library.py. Every value is geometry of the
+# object in its own frame (the OBJ frame FoundationPose reports), never a wrist
+# target: the planner still derives the wrist from the jaw and these numbers.
+#
+#   when:        which rest pose this grasp is for, read off the estimated pose:
+#                  {axis: [x,y,z], is: vertical|horizontal} -- that object axis within
+#                  45 deg of world up (vertical) or of the table plane (horizontal).
+#                  Omitted = any pose (round objects).
+#   center:      grasp centre in the object frame (m); the jaw closes around it.
+#   jaw_across:  object axis the thumb->fingers line must be perpendicular to (the
+#                hand wraps *around* that axis). Omitted = any heading about the
+#                vertical (the object is round seen from above).
+#   width:       object width across the jaw (m) -> preshape aperture, clearance check.
+#   height:      object height at rest (m) -> carry clearance over the rim, set-down.
+#   footprint:   largest half-extent on the table (m) -> "is it inside the basket".
+#   height_bias: jaw centre height above `center` (m). Omitted = the planner's 4 cm,
+#                set for the upright can (a 10 cm object: the fingertips close above
+#                the table). A lying cylinder is closed through its axis instead (0):
+#                with 4 cm the open fingertips hung 20 mm above a lying can and missed
+#                it (render, 2026-09-28).
+#   jaw_offsets_deg: how far off square to jaw_across the jaw may run (deg). Omitted =
+#                0, +-15, +-30 (fine around a cylinder); flat sides: [0] only.
+#   close:       finger order: fingers_first (default) or together (rolling objects).
+#   keep:        what "not tilted" means for the proof lift and final check:
+#                  {axis: [x,y,z], is: vertical|horizontal} or omitted (sphere: never tilted).
+#
+# Widths/heights are the collision geometry's (simulation/objects.py): can = cylinder
+# r 35.4 mm, h 100 mm; fruit = OBJ convex hull.
+
+can:
+  - name: upright_wrap          # the existing top grasp, round about the vertical
+    when: {axis: [0, 0, 1], is: vertical}
+    center: [0, 0, 0]
+    width: 0.0708
+    height: 0.100
+    footprint: 0.0354
+    keep: {axis: [0, 0, 1], is: vertical}
+  - name: lying_wrap            # from above, fingers wrapping across the can's axis
+    when: {axis: [0, 0, 1], is: horizontal}
+    center: [0, 0, 0]
+    jaw_across: [0, 0, 1]
+    height_bias: 0.0
+    width: 0.0708
+    height: 0.0708
+    footprint: 0.050
+    keep: {axis: [0, 0, 1], is: horizontal}
+
+apple:
+  - name: top_wrap              # across the equator, as for the lying can
+    center: [0, 0, 0]
+    height_bias: 0.0
+    width: 0.0754
+    height: 0.0718
+    footprint: 0.0377
+
+orange:
+  - name: top_wrap
+    center: [0, 0, 0]
+    height_bias: 0.0
+    width: 0.0740
+    height: 0.0714
+    footprint: 0.0370
+
+pear:
+  # Lying pear, long axis = object +y, wide end at -y. The hand wraps the body 1 cm
+  # toward the wide end, where the section is widest (66 mm) -- measured per 2 cm
+  # slice of the OBJ: 56 / 66 / 66 / 50 / 35 mm from -y to +y.
+  - name: body_wrap
+    when: {axis: [0, 1, 0], is: horizontal}
+    center: [0, -0.01, 0]
+    jaw_across: [0, 1, 0]
+    height_bias: 0.0
+    width: 0.0665
+    height: 0.0656
+    footprint: 0.0502
+    keep: {axis: [0, 1, 0], is: horizontal}
+
+# --- Task object set (2026-09-28): the four YCB objects this hand takes most easily,
+# each with the grasp that measured best. can = 005 above (upright_wrap; lying_wrap
+# also works but covers fewer headings). Dropped after measuring: 003 cracker box and
+# 006 mustard bottle (19-21 cm tall: a top grasp's palm lands on the top before the
+# fingers reach the body -- the bottle tipped 16 deg on the approach; they need a side
+# grasp), 010 potted meat can (download incomplete).
+# Scanned meshes are not centred on their origin: `center` is the geometric centre in
+# the OBJ frame, so the planner's "object position" is the centre, as for the can.
+
+tuna_can:
+  # YCB 007, flat, 86 mm across x 34 mm: round from above (any heading), closed
+  # through its mid-height -- only 34 mm of side to hold. Measured: 5/5 fingers,
+  # thumb 21 N, 2 mm slip.
+  - name: flat_rim_pinch
+    when: {axis: [0, 0, 1], is: vertical}
+    center: [-0.0260, -0.0221, 0.0136]
+    height_bias: 0.0
+    width: 0.0856
+    height: 0.0335
+    footprint: 0.0428
+    keep: {axis: [0, 0, 1], is: vertical}
+
+tennis_ball:
+  # YCB 056, 67 mm sphere: top grasp through the equator, any heading (as the
+  # apple/orange, which passed first time).
+  - name: top_wrap
+    center: [0.0084, -0.0444, 0.0332]
+    height_bias: 0.0
+    close: together            # fingers first rolled the ball 10 cm away
+    width: 0.0668
+    height: 0.0665
+    footprint: 0.0334
+
+gelatin_box:
+  # YCB 009, lying flat: 72.9 x 89.3 mm top, 30 mm tall, its sides turned 13.25 deg in
+  # the scan frame. The jaw spans the 72.9 mm side, i.e. runs along the box axis
+  # (0.9734, 0.2292, 0) and square to (-0.2292, 0.9734, 0); flat sides -> square only.
+  - name: flat_short_side
+    when: {axis: [0, 0, 1], is: vertical}
+    center: [-0.0226, -0.0084, 0.0145]
+    jaw_across: [-0.2292, 0.9734, 0]
+    jaw_offsets_deg: [0]
+    height_bias: 0.0
+    width: 0.0729
+    height: 0.030
+    footprint: 0.0575
+    keep: {axis: [0, 0, 1], is: vertical}
+  # (A second grasp across the 89.3 mm side was tried for headings the short side
+  # cannot reach: a 30 mm-tall box pinched across its long side tipped 46 deg on the
+  # proof lift and fell on its edge -- dropped, 2026-09-28.)
+
+peach:
+  # YCB 015, 62 x 63 x 59 mm: top grasp through the equator, as the apple/orange.
+  - name: top_wrap
+    center: [0, 0, 0]
+    height_bias: 0.0
+    width: 0.0626
+    height: 0.0586
+    footprint: 0.0313

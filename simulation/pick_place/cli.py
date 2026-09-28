@@ -18,6 +18,8 @@ import mujoco.viewer
 import numpy as np
 
 from simulation.five_finger_model import BASKET_POSITION_B, PICK_POSITION_A
+from simulation.objects import OBJECTS, Placement
+from simulation.pick_place.pose_source import BACKENDS
 from simulation.pick_place.demo import PHASES, Demo, run_trial, sample_layout
 from simulation.pick_place.episode import write_report
 from simulation.pick_place.handoff import HandoffDemo, run_handoff_trial
@@ -46,6 +48,17 @@ def build_parser() -> argparse.ArgumentParser:
     layout.add_argument("--perception", action="store_true", help="object position from the head camera (RGB-D), not sim state")
     layout.add_argument("--arm", choices=("auto", "right", "left"), default="auto",
                         help="arm selection; auto runs IK/collision preflight (default)")
+    layout.add_argument("--platform", type=float, default=0.0, metavar="H",
+                        help="work platform height (m) under object and basket; centre-basket layout uses 0.10")
+
+    objects = parser.add_argument_group("objects and 6D pose (simulation/objects.py, config/grasp_library.yaml)")
+    objects.add_argument("--pick-object", choices=sorted(OBJECTS), default="can", help="object at the pick point")
+    objects.add_argument("--pick-pose", default="upright", help="rest pose of the pick object (upright, lying)")
+    objects.add_argument("--pick-yaw", type=float, default=0.0, metavar="DEG", help="turn of the pick object about vertical")
+    objects.add_argument("--extra", nargs=4, action="append", default=[], metavar=("KEY", "X", "Y", "POSE"),
+                         help="another object on the table (repeatable), e.g. --extra apple 0.30 -0.42 upright")
+    objects.add_argument("--pose-backend", choices=BACKENDS,
+                         help="perceive the full 6D pose and grasp from the grasp library (gt, color, foundationpose)")
 
     debug = parser.add_argument_group("debugging")
     debug.add_argument("--camera", choices=CAMERAS, default="isometric")
@@ -82,13 +95,21 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--trials must be positive")
     layout = dict(pick_position=tuple(args.object), basket_position=tuple(args.basket),
                   perception=args.perception, verbose=args.verbose)
+    scene_kwargs = dict(
+        work_platform_height=args.platform, pick_object=args.pick_object, pick_pose=args.pick_pose,
+        pick_yaw_deg=args.pick_yaw,
+        extra_objects=[Placement(key, (float(x), float(y)), pose) for key, x, y, pose in args.extra],
+    )
+    custom_scene = args.platform > 0.0 or args.pick_object != "can" or args.pick_pose != "upright"         or args.pick_yaw != 0.0 or bool(args.extra) or args.pose_backend is not None
+    if custom_scene and args.randomize:
+        parser.error("--randomize samples can layouts only; drop the object/pose options")
 
     def route_for(trial_layout: dict):
         """(source_arm, reason) for a direct route, or the routing.RouteDecision
         itself for a handoff, so the caller can build the right episode type."""
         if args.arm != "auto":
             return (args.arm, "arm selected explicitly")
-        scene = Scene(trial_layout["pick_position"], trial_layout["basket_position"])
+        scene = Scene(trial_layout["pick_position"], trial_layout["basket_position"], **scene_kwargs)
         observed = None
         if args.perception:
             detection = VisionDetector(scene.model, "d435_head").detect_object(scene.data, render_annotation=False)
@@ -109,10 +130,16 @@ def main(argv: list[str] | None = None) -> None:
         route = route_for(trial_layout)
         if isinstance(route, tuple):
             side, reason = route
-            demo = Demo(**trial_layout, side=side)
+            if custom_scene:
+                scene = Scene(trial_layout["pick_position"], trial_layout["basket_position"], **scene_kwargs)
+                demo = Demo(**trial_layout, side=side, scene=scene, pose_backend=args.pose_backend)
+            else:
+                demo = Demo(**trial_layout, side=side)
             demo.route_reason = reason
             return demo
         decision = route
+        if custom_scene:
+            raise RuntimeError(f"{decision.route.value} needs a handoff, which the object/pose options do not support")
         handoff = HandoffDemo(
             trial_layout["pick_position"], trial_layout["basket_position"],
             source_arm=decision.source_arm, target_arm=decision.target_arm,

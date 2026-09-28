@@ -66,6 +66,11 @@ class TrialResult:
     seed: int | None = None
     trial_index: int | None = None
     model_timestep_s: float | None = None
+    # Which object, which grasp library entry, which pose backend (6D pipeline)
+    object_key: str | None = None
+    grasp_name: str | None = None
+    pose_backend: str | None = None
+    pose_rotation_error_deg: float | None = None
 
     def summary(self) -> str:
         status = "PASS" if self.success else f"FAIL in {self.failed_phase}"

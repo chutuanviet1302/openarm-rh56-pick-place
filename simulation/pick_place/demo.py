@@ -16,7 +16,6 @@ from simulation.five_finger_model import BASKET_HALF_WIDTH, BASKET_POSITION_B, B
 from simulation.pick_place import config as C
 from simulation.pick_place.episode import EpisodeLog, TrialResult
 from simulation.pick_place.executor import Executor
-from simulation.pick_place.kinematics import upright_tilt_degrees
 from simulation.pick_place.planner import GraspPlanner, Plan
 from simulation.pick_place.scene import Scene
 from simulation.vision_detector import VisionDetector
@@ -40,7 +39,14 @@ class Demo:
         side: str = "right",
         scene: Scene | None = None,
         place_offset: tuple[float, float] | None = None,
+        pose_backend: str | None = None,
+        release: str = "set_down",
+        detection_mask: np.ndarray | None = None,
+        mask_source=None,
     ) -> None:
+        """`pose_backend` ('gt', 'color', 'foundationpose'; pose_source.py): perceive
+        the object's full 6D pose and take it as the grasp library says for that pose.
+        None keeps the original position-only can pipeline (`perception` flag)."""
         if side not in ("left", "right"):
             raise ValueError("side must be 'left' or 'right'")
         self.side = side
@@ -65,6 +71,22 @@ class Demo:
         self.perception_camera = perception_camera
         self.perceived_position: np.ndarray | None = None
         self.perception_error_m: float | None = None
+        self.pose_backend = pose_backend
+        self.perceived_pose: np.ndarray | None = None
+        self.grasp_options: list = []
+        # "set_down": lower until the object rests on the basket floor (the can
+        # pipeline); "drop": let go just above the rim (table clearing: the basket may
+        # already hold other objects, the object need not stand).
+        if release not in ("set_down", "drop"):
+            raise ValueError("release must be 'set_down' or 'drop'")
+        self.release = release
+        # Object pixels from the detector (object_detector.py), handed to a 6D backend
+        # that needs a mask (FoundationPose) instead of the simulator's segmentation.
+        self.detection_mask = detection_mask
+        # mask_source() -> the object's pixels from a fresh look: every perceive (a
+        # retry included) uses a current mask; a failed grasp moves the object, and a
+        # stale mask put FoundationPose 92 mm off, below the table (bin task, peach).
+        self.mask_source = mask_source
         self.plan: Plan | None = None
         self.light_grip_ctrl: np.ndarray | None = None
         self.failed_grasp_yaws: list[float] = []
@@ -96,7 +118,12 @@ class Demo:
 
     # ------------------------------------------------------------------ perception
     def object_position(self) -> np.ndarray:
-        """Where the planner believes the object is."""
+        """Where the planner believes the object is (with a pose backend: the grasp
+        library's grasp centre on the perceived pose)."""
+        if self.pose_backend is not None:
+            if self.scene.grasp_target is None:
+                self.perceive_pose()
+            return self.scene.grasp_target.center_world.copy()
         if self.perception:
             if self.perceived_position is None:
                 self.perceive_object()
@@ -119,6 +146,56 @@ class Demo:
         self.log.record("perceived_position", self.perceived_position)
         self.log.record("perception_error_m", self.perception_error_m)
         return self.perceived_position
+
+    def perceive_pose(self) -> np.ndarray:
+        """6D pose from `pose_backend`, then the grasp library entry for it. The error
+        against ground truth is logged (symmetry-aware), never used."""
+        from simulation.objects import OBJECTS
+        from simulation.pick_place.grasp_library import select_grasps
+        from simulation.pick_place.pose_source import get_object_pose, pose_error
+
+        scene = self.scene
+        mask = self.mask_source() if self.mask_source is not None else self.detection_mask
+        pose = get_object_pose(scene, scene.pick_object, self.pose_backend, self.perception_camera, mask=mask)
+        self._check_pose_plausible(pose)
+        spec = OBJECTS[scene.pick_type]
+        translation, rotation = pose_error(pose, scene.object_pose(), spec.symmetry, _keep_axis(scene.pick_type, pose))
+        # Where the object will be when the hand gets there (a moving object:
+        # ConveyorDemo); the grasp is planned for that pose.
+        pose = self.planning_pose(pose)
+        self.grasp_options = select_grasps(scene.pick_type, pose)
+        target = self.grasp_options[0]
+        scene.set_grasp_target(target, self.side)
+        self.perceived_pose = pose
+        self.perceived_position = pose[:3, 3].copy()
+        self.perception_error_m = translation
+        self.log.record("perceived_pose", pose)
+        self.log.record("perceived_position", self.perceived_position)
+        self.log.record("perception_error_m", translation)
+        self.log.record("pose_rotation_error_deg", rotation)
+        self.log.record("grasp_name", target.name)
+        self.log.record("grasp_closure_fraction", scene.grasp_closure_fraction)
+        return pose
+
+    POSE_SURFACE_TOLERANCE_M = 0.02
+
+    def _check_pose_plausible(self, pose: np.ndarray) -> None:
+        """An object on the table rests on it: its lowest point within
+        POSE_SURFACE_TOLERANCE_M of the work surface. A pose that sinks it into the
+        table or floats it is a perception failure, not something to plan a grasp for."""
+        from simulation.objects import collision_points
+
+        scene = self.scene
+        lowest = float((collision_points(scene.pick_type) @ pose[:3, :3].T + pose[:3, 3])[:, 2].min())
+        gap = lowest - scene.work_surface_z
+        if abs(gap) > self.POSE_SURFACE_TOLERANCE_M:
+            raise RuntimeError(f"perception failed: implausible {scene.pick_object} pose "
+                               f"(lowest point {gap * 1000:+.0f} mm from the table)")
+
+    def planning_pose(self, observed: np.ndarray) -> np.ndarray:
+        """The pose to plan the grasp for, from the one just observed: the same for a
+        still object; ConveyorDemo moves it on to where the belt will have taken it."""
+        return observed
 
     # ------------------------------------------------------------------ grasp checks
     def fingers_not_pressing(self) -> list[str]:
@@ -146,6 +223,17 @@ class Demo:
 
     # ------------------------------------------------------------------ phases
     def phase_perceive(self) -> None:
+        if self.pose_backend is not None:
+            self.perceive_pose()
+            target = self.scene.grasp_target
+            heading = "any" if target.jaw_heading_deg is None else f"{target.jaw_heading_deg:.0f}deg"
+            self.log.note(
+                f"{self.scene.pick_object} pose from '{self.pose_backend}': "
+                f"{np.round(self.perceived_position, 3).tolist()} (error {self.perception_error_m*1000:.1f}mm, "
+                f"{self.log.values['pose_rotation_error_deg']:.1f}deg) -> grasp '{target.name}', jaw heading {heading}, "
+                f"pre-shape {self.scene.grasp_closure_fraction:.2f}"
+            )
+            return
         if not self.perception:
             self.log.note("perception off: planning from the simulator's object pose")
             return
@@ -218,12 +306,19 @@ class Demo:
         return None if self.place_offset is None else self.scene.basket_floor() + self.place_offset
 
     def phase_plan(self) -> None:
-        self.plan = self.executor.think(
-            self.planner.plan, self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws), place_floor=self.place_floor()
-        )
+        if self.pose_backend is not None and len(self.grasp_options) > 1:
+            self._plan_library_grasps()
+        else:
+            self.plan = self.executor.think(
+                self.planner.plan, self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws), place_floor=self.place_floor()
+            )
         self.log.record("grasp_yaw_deg", float(self.plan.grasp_yaw_deg))
         self.log.record("place_yaw_deg", float(self.plan.place_yaw_deg))
         self.log.record("route_strategy", self.plan.route_strategy)
+        self.log.record("jaw_offset_deg", float(self.plan.jaw_offset_deg))
+        if self.plan.jaw_offset_deg:
+            self.log.note(f"jaw runs {self.plan.jaw_offset_deg:+.0f}deg off square to the object's axis "
+                          f"(pre-shape {self.scene.grasp_closure_fraction:.2f})")
         self.log.record(
             "min_joint_margin_deg",
             min(self.planner.joint_margin_degrees(joints) for joints in self.plan.joints.values()),
@@ -233,6 +328,26 @@ class Demo:
         self.log.note(f"waypoints solved via {self.plan.route_strategy}, set-down hand yaw {self.plan.place_yaw_deg:+.0f} degrees")
         if self.log.verbose:
             print(self.planner.describe(self.plan))
+
+    def _plan_library_grasps(self) -> None:
+        """Plan the grasp library's options for the perceived pose in order (preferred
+        first); the first with a reachable heading wins."""
+        failures = []
+        for target in self.grasp_options:
+            self.scene.set_grasp_target(target, self.side)
+            try:
+                self.plan = self.executor.think(
+                    self.planner.plan, self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws),
+                    place_floor=self.place_floor(),
+                )
+            except RuntimeError as error:
+                failures.append(f"{target.name}: {str(error).splitlines()[0]}")
+                continue
+            self.log.record("grasp_name", target.name)
+            if failures:
+                self.log.note(f"grasp '{target.name}' planned after: " + "; ".join(failures))
+            return
+        raise RuntimeError("no grasp in the library plans:\n  " + "\n  ".join(failures))
 
     def phase_ready(self) -> None:
         ex, plan = self.executor, self.plan
@@ -264,9 +379,21 @@ class Demo:
 
     def phase_grasp(self) -> None:
         ex, scene, side = self.executor, self.scene, self.side
+        forces = self.close_hand()
+        grasp_orientation = self.plan.grasp_orientation if self.plan.grasp_orientation is not None else self.planner.orientation
+        self._proof_lift_and_regrip(grasp_orientation, forces)
+
+    def close_hand(self) -> dict[str, float]:
+        """Close onto the object until every finger presses (raises if one cannot)."""
+        ex, scene, side = self.executor, self.scene, self.side
         fingers = ("index", "middle", "ring", "pinky")
-        ex.close_until_contact(side, fingers, force_target=1.0)
-        ex.close_until_contact(side, ("thumb",), force_target=1.0)
+        target = scene.grasp_target
+        if target is not None and target.entry.close == "together":
+            # Round objects roll away from fingers that close first: thumb with them.
+            ex.close_until_contact(side, (*fingers, "thumb"), force_target=1.0)
+        else:
+            ex.close_until_contact(side, fingers, force_target=1.0)
+            ex.close_until_contact(side, ("thumb",), force_target=1.0)
         # Remember the light-contact hand pose: the release returns to it first.
         self.light_grip_ctrl = scene.data.ctrl[scene.hand_actuators[side]].copy()
         forces = ex.close_until_contact(side, (*fingers, "thumb"))
@@ -281,9 +408,26 @@ class Demo:
             raise RuntimeError(f"not all fingers touch the object before lift; missing {missing}: {forces}")
         self.log.record("grasp_forces", scene.finger_contact_forces(side))
         self.log.note("thumb opposed by at least two fingers -> proof lift")
+        return forces
 
-        grasp_orientation = self.plan.grasp_orientation if self.plan.grasp_orientation is not None else self.planner.orientation
-        rise, tilt, hand_rise = ex.proof_lift(side, grasp_orientation)
+    def proof_lift_limits(self) -> tuple[float, float]:
+        """(max slip m, max tilt deg) the proof lift accepts for this hand. A drop
+        release only has to get the object over the box, so both hands take the right
+        hand's 10 mm / 15 deg there; the left's 6 mm / 11 deg were set for lifting a can
+        back out of the centre basket, and a firm five-finger left grip on an apple
+        measured 8 mm (fruit settles into the grip). A loosened limit, stated; a grip
+        that really fails is still caught by the re-grip and carry-clearance checks."""
+        if self.release == "drop":
+            return C.PROOF_LIFT_SLIP_LIMIT["right"], C.PROOF_LIFT_TILT_LIMIT_DEG["right"]
+        return C.PROOF_LIFT_SLIP_LIMIT[self.side], C.PROOF_LIFT_TILT_LIMIT_DEG[self.side]
+
+    def proof_lift(self, grasp_orientation: np.ndarray) -> tuple[float, float, float]:
+        """(object rise, tilt deg, hand rise) of the proof lift (Executor.proof_lift)."""
+        return self.executor.proof_lift(self.side, grasp_orientation)
+
+    def _proof_lift_and_regrip(self, grasp_orientation: np.ndarray, forces: dict[str, float]) -> None:
+        ex, scene, side = self.executor, self.scene, self.side
+        rise, tilt, hand_rise = self.proof_lift(grasp_orientation)
         slip = hand_rise - rise
         self.log.record("proof_lift_rise_m", rise)
         self.log.record("proof_lift_hand_rise_m", hand_rise)
@@ -291,7 +435,8 @@ class Demo:
         self.log.note(f"proof lift: hand {hand_rise*100:+.1f}cm, object {rise*100:+.1f}cm (slip {slip*1000:.0f}mm), tilt {tilt:.0f} degrees")
         if hand_rise < C.PROOF_LIFT_MIN_HAND_RISE:
             raise RuntimeError(f"proof lift did not happen: hand rose only {hand_rise*100:.1f}cm")
-        if slip > C.PROOF_LIFT_SLIP_LIMIT[side] or tilt > C.PROOF_LIFT_TILT_LIMIT_DEG[side]:
+        slip_limit, tilt_limit = self.proof_lift_limits()
+        if slip > slip_limit or tilt > tilt_limit:
             raise RuntimeError(
                 f"grasp failed: object did not come with the hand (hand +{hand_rise*100:.1f}cm, "
                 f"object +{rise*100:.1f}cm, slip {slip*1000:.0f}mm, tilt {tilt:.0f}deg); forces {forces}"
@@ -344,6 +489,9 @@ class Demo:
         path = plan.paths["transfer"]
         ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
         self._check_carry_clearance("transfer")
+        if self.release == "drop":
+            self._lower_to_drop_height()
+            return
         # Re-centre at carry height, before entering the basket.  The old lower path
         # was solved from a stale held offset; using it after a lateral correction
         # made the left wrist enter the rim with no valid IK escape.
@@ -466,6 +614,21 @@ class Demo:
             self.log.record("set_down_release_gap_m", gap)
             self.log.note(f"arm at full reach; releasing {gap*1000:.1f}mm above the basket floor")
 
+    def _lower_to_drop_height(self) -> None:
+        """Follow the planned lowering only while the object's bottom stays
+        DROP_ABOVE_RIM over the rim, then stop: the release lets it fall the rest."""
+        ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
+        allowed = scene.object_bottom_z() - (scene.basket_rim_z() + C.DROP_ABOVE_RIM)
+        start_z = float(scene.wrist_position(side)[2])
+        path = [q for q in plan.paths["lower"]
+                if start_z - float(self.scene.wrist_position_at(side, q)[2]) <= allowed]
+        if path:
+            ex.follow({f"{side}_arm": path}, [C.LOWER_SECONDS / len(plan.paths["lower"])] * len(path))
+            plan.joints["lower"] = path[-1]
+        drop = scene.object_bottom_z() - scene.basket_rim_z()
+        self.log.record("drop_height_above_rim_m", drop)
+        self.log.note(f"releasing with the object's bottom {drop*100:.1f}cm above the basket rim")
+
     def _centre_over_basket(self, orientation: np.ndarray) -> None:
         """Slide the wrist so the object -- not the wrist -- hangs over the basket centre.
 
@@ -570,7 +733,7 @@ class Demo:
             # No reachable raise point (left arm after a centre-basket retrieval,
             # real-height robot, 2026-09-24). Go straight home only if that blend is
             # clear of the basket, the object and the table.
-            obstacles = scene.basket_geoms | {scene.object_geom} | scene.table_geoms
+            obstacles = scene.basket_geoms | {scene.object_geom} | scene.table_geoms | scene.other_object_geoms()
             blocked = self.planner.blend_contacts(plan["hover"], scene.attention_pose[side], obstacles)
             if blocked:
                 raise
@@ -635,6 +798,7 @@ class Demo:
         ex.move_to({arm: scene.attention_pose[side]}, C.RETURN_SECONDS)
         ex.hold(C.SETTLE_AT_START)
         self.perceived_position = None  # look again: the failed grasp may have moved it
+        self.scene.grasp_target = None
 
     def restart(self) -> None:
         """Put the scene back at the start of an episode and clear the log, so `run()`
@@ -644,6 +808,8 @@ class Demo:
         self.executor = Executor(self.scene, on_step=self.executor.on_step)
         self.executor.active_side = self.side
         self.perceived_position = None
+        self.perceived_pose = None
+        self.scene.grasp_target = None
         self.light_grip_ctrl: np.ndarray | None = None
         self.failed_grasp_yaws: list[float] = []
         self.perception_error_m = None
@@ -657,6 +823,17 @@ class Demo:
     def _solve_poses(self) -> dict[str, dict[str, np.ndarray]]:
         self.plan = self.planner.plan(self.object_position())
         return {self.side: {**self.plan.joints, **{f"{k}_path": v for k, v in self.plan.paths.items()}}}
+
+
+def _keep_axis(key: str, pose: np.ndarray):
+    """The object axis the pose error is scored on (grasp library 'keep' rule)."""
+    from simulation.pick_place.grasp_library import select_grasp
+
+    try:
+        keep = select_grasp(key, pose).entry.keep
+    except RuntimeError:
+        keep = None
+    return keep.axis if keep is not None else (0.0, 0.0, 1.0)
 
 
 # ---------------------------------------------------------------------- trials / layouts
@@ -704,12 +881,20 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
     scene, values = demo.scene, demo.log.values
     final_pos = scene.object_position()
     placement_error = float(np.linalg.norm(final_pos[:2] - scene.basket_floor()[:2]))
-    inside_basket = scene.object_inside_basket()
-    tilt = upright_tilt_degrees(scene.object_quaternion())
+    # Grasp-library picks (lying can/pear) may roll against a wall after the release:
+    # judged on resting in the basket. The original can pipeline keeps its 2mm margin.
+    # A drop only has to end up in the basket (possibly on another object).
+    if demo.release == "drop":
+        inside_basket = scene.object_in_basket()
+    elif scene.grasp_target is not None:
+        inside_basket = scene.object_resting_in_basket()
+    else:
+        inside_basket = scene.object_inside_basket()
+    tilt = scene.object_tilt_deg()
     if failure is None and stop_after is None:
         if not inside_basket:
             failure = f"object footprint is outside basket (placement error {placement_error*1000:.1f}mm)"
-        elif tilt > C.PROOF_LIFT_MAX_TILT_DEG:
+        elif tilt > C.PROOF_LIFT_MAX_TILT_DEG and demo.release != "drop":
             failure = f"final object tilt {tilt:.1f}deg exceeds {C.PROOF_LIFT_MAX_TILT_DEG:.0f}deg"
     return TrialResult(
         failure is None,
@@ -751,4 +936,8 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
         min_joint_margin_deg=values.get("min_joint_margin_deg"),
         max_penetration_m=demo.executor.max_penetration_m,
         model_timestep_s=float(scene.model.opt.timestep),
+        object_key=scene.pick_type,
+        grasp_name=values.get("grasp_name"),
+        pose_backend=demo.pose_backend,
+        pose_rotation_error_deg=values.get("pose_rotation_error_deg"),
     )

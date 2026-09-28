@@ -15,7 +15,7 @@ import mujoco
 import numpy as np
 
 from simulation.pick_place import config as C
-from simulation.pick_place.kinematics import quintic, solve_pose_ik, upright_tilt_degrees
+from simulation.pick_place.kinematics import quintic, solve_pose_ik
 from simulation.pick_place.scene import Scene
 
 
@@ -213,7 +213,7 @@ class Executor:
             # GRASP_CLOSURE_FRACTION (Scene.jaw_offsets_at); give the hand that shape.
             thumb = scene.finger_actuator[side]["thumb"]
             opened, closed = scene.open_ctrl[side]["thumb"], scene.closed_ctrl[side]["thumb"]
-            self.data.ctrl[thumb] = opened + C.GRASP_CLOSURE_FRACTION * (closed - opened)
+            self.data.ctrl[thumb] = opened + scene.grasp_closure_fraction * (closed - opened)
         if C.PRESHAPE_THUMB_STAGED[side]:
             self.data.ctrl[yaw_actuator] = unopposed
             self.hold(C.PRESHAPE_THUMB_OPEN_SECONDS)
@@ -235,10 +235,14 @@ class Executor:
                 self.data.ctrl[actuator] = start[actuator] + (target - start[actuator]) * fraction
             self._step()
 
-    def close_until_contact(self, side: str, fingers: tuple[str, ...], force_target: float = C.CONTACT_FORCE_TARGET_N) -> dict[str, float]:
+    def close_until_contact(self, side: str, fingers: tuple[str, ...], force_target: float = C.CONTACT_FORCE_TARGET_N,
+                            step_fraction: float | None = None, stop_at_limit: bool = False) -> dict[str, float]:
         """Close `fingers` a small step at a time, holding each once it presses with
         `force_target`. Fingers are driven only through ctrl; the contact solver is what
-        stops them on the object's surface."""
+        stops them on the object's surface. `step_fraction` overrides the step;
+        `stop_at_limit` ends the loop once every finger not yet pressing is commanded
+        fully closed (a finger that misses the object otherwise keeps the loop going
+        for CLOSE_MAX_ITERATIONS -- too long on a moving belt)."""
         scene = self.scene
         actuators = {name: scene.finger_actuator[side][name] for name in fingers}
         held: set[str] = set()
@@ -252,11 +256,15 @@ class Executor:
                     held.add(name)
                     continue
                 lower, upper = self.model.actuator_ctrlrange[actuator]
-                step = C.CLOSE_STEP_FRACTION * (upper - lower)
+                step = (step_fraction or C.CLOSE_STEP_FRACTION) * (upper - lower)
                 current = float(self.data.ctrl[actuator])
                 delta = float(np.clip(scene.closed_ctrl[side][name] - current, -step, step))
                 self.data.ctrl[actuator] = np.clip(current + delta, lower, upper)
             if len(held) == len(actuators):
+                break
+            if stop_at_limit and all(
+                abs(float(self.data.ctrl[a]) - scene.closed_ctrl[side][n]) < 1e-9 for n, a in actuators.items() if n not in held
+            ):
                 break
             for _ in range(settle):
                 self._step()
@@ -308,4 +316,4 @@ class Executor:
             self._step()
         rise = float(scene.object_position()[2]) - object_before
         hand_rise = float(scene.wrist_position(side)[2]) - hand_before
-        return rise, upright_tilt_degrees(scene.object_quaternion()), hand_rise
+        return rise, scene.object_tilt_deg(), hand_rise

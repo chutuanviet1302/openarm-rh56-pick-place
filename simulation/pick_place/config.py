@@ -138,6 +138,9 @@ ARM_BODY_CLEARANCE_MAX = 0.05
 # actually touches the floor (SET_DOWN_*), and only then opens: releasing a can that is
 # still in the air let the opening thumb lever it 5cm up and it landed 3cm off.
 PLACE_DROP_HEIGHT = 0.02
+# Drop release (table clearing, Demo(release="drop")): the object's bottom this far
+# above the basket rim when the hand lets go.
+DROP_ABOVE_RIM = 0.015
 # No standing XY bias: the object is centred over the basket from its own measured
 # position just before the set-down (Demo._centre_over_basket). The hand-tuned offsets
 # that used to live here were calibrated against one carry timing -- at 19.3mm long they
@@ -168,6 +171,13 @@ GRASP_TILT_CANDIDATES = (("y", -30.0), ("x", -30.0), ("y", -15.0), ("x", 60.0), 
 # closed over the can's top, 2026-09-24; y-30 / x-30 are 6mm).
 MAX_OBLIQUE_JAW_DZ = 0.02
 GRASP_YAW_CANDIDATES_DEG = (0.0, -30.0, 30.0, 15.0, -15.0, -60.0, 60.0, -90.0, 90.0)
+# Objects the jaw must cross at a set heading (grasp library jaw_across: lying can,
+# pear): the jaw may run this far off square to the object's axis, exact first. The
+# right arm reaches a ~100 deg window of jaw headings at the centre-basket pick point
+# (0.28, -0.25), so square-only grasps cover about half of all lying yaws; 30 deg off
+# covers ~90%. Off square, the jaw spans width / cos(offset) of a cylinder, and the
+# pre-shape is opened to fit that (GraspPlanner.plan).
+GRASP_JAW_OFFSETS_DEG = (0.0, -15.0, 15.0, -30.0, 30.0)
 # How many physically rejected grasps (finger not pressing, proof lift failed) the
 # episode lets go of and retries with another heading before giving up.
 GRASP_RETRIES = 3
