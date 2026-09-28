@@ -83,7 +83,7 @@ def nominal_approach_seconds() -> float:
     as the phases schedule it (the executor may stretch a move; the fresh look before
     the final approach absorbs that)."""
     preshape = C.PRESHAPE_THUMB_OPEN_SECONDS if any(C.PRESHAPE_THUMB_STAGED.values()) else 0.0
-    return (C.SETTLE_AT_START + C.MOVE_TO_RAISE + C.MOVE_TO_HOVER + C.MOVE_TO_READY + preshape
+    return (C.DROP_SETTLE_AT_START + C.MOVE_TO_RAISE + C.MOVE_TO_HOVER + C.MOVE_TO_READY + preshape
             + C.PRESHAPE_SETTLE + C.MOVE_TO_PREGRASP + C.MOVE_TO_GRASP)
 
 
@@ -113,11 +113,18 @@ class ConveyorDemo(Demo):
         return pose
 
     def predicted_center(self, at_time: float) -> np.ndarray:
-        """Grasp centre (world) at `at_time`, from a fresh look now."""
-        observed = self.observe() if self.observe is not None else get_object_pose(self.scene, backend="gt")
+        """Grasp centre (world) at `at_time`, from a fresh look now -- or, when the hand
+        hovering over the object hides it from the head camera, from the tracked
+        estimate (the planning pose moved on at the belt velocity)."""
         entry = self.scene.grasp_target.entry
+        try:
+            observed = self.observe() if self.observe is not None else get_object_pose(self.scene, backend="gt")
+            now = float(self.data.time)
+        except RuntimeError as error:
+            self.log.note(f"final look failed ({str(error).splitlines()[0]}); using the tracked estimate")
+            observed, now = self.perceived_pose, self.intercept_time
         centre = observed[:3, :3] @ np.asarray(entry.center) + observed[:3, 3]
-        return centre + self.velocity * (at_time - float(self.data.time))
+        return centre + self.velocity * (at_time - now)
 
     # ---------------------------------------------------------------- phases
     def phase_plan(self) -> None:
@@ -525,9 +532,24 @@ class ConveyorTask:
         executor.active_side = side
         if self.recorder is not None:
             executor.on_step = self.recorder.tick
-        executor.move_to({f"{side}_hand": scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS)}, C.RELEASE_SECONDS)
-        executor.move_to({f"{side}_arm": scene.attention_pose[side], f"{side}_hand": scene.rest_hand[side]},
-                         2.0 * C.RETURN_SECONDS)
+        try:
+            executor.move_to({f"{side}_hand": scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS)}, C.RELEASE_SECONDS)
+            # Straight up first: a failed pick can leave the hand low over the table or
+            # belt, and a direct blend home swept a finger into the belt.
+            from simulation.pick_place.kinematics import solve_pose_ik, wrist_frame
+
+            here = scene.data.ctrl[scene.arm_actuators[side]].copy()
+            position, rotation = wrist_frame(scene.model, side, here)
+            try:
+                up = solve_pose_ik(scene.model, side, position + np.array([0.0, 0.0, 0.12]), rotation, here)
+                executor.move_to({f"{side}_arm": up}, C.RETURN_SECONDS)
+            except RuntimeError:
+                pass
+
+            executor.move_to({f"{side}_arm": scene.attention_pose[side], f"{side}_hand": scene.rest_hand[side]},
+                             2.0 * C.RETURN_SECONDS)
+        except RuntimeError as error:
+            print(f"   (homing the {side} arm stopped: {str(error).splitlines()[0]})")
 
 
 def main(argv: list[str] | None = None) -> None:

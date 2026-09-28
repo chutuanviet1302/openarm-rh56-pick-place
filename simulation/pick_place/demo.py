@@ -303,6 +303,14 @@ class Demo:
         plan.centers["lift"] = target
 
     def place_floor(self) -> np.ndarray | None:
+        """The surface the object is set down on (its bottom), for the planner. A drop
+        is planned to end with the object's bottom DROP_ABOVE_RIM over the rim -- the
+        hand never goes into the box, so no box wall constrains the plan (planned all
+        the way to the floor, a narrow box rejected grasps that the drop never needed)."""
+        if self.release == "drop":
+            floor = self.scene.basket_floor() + (self.place_offset if self.place_offset is not None else 0.0)
+            floor[2] = self.scene.basket_rim_z() + C.DROP_ABOVE_RIM - C.PLACE_DROP_HEIGHT
+            return floor
         return None if self.place_offset is None else self.scene.basket_floor() + self.place_offset
 
     def phase_plan(self) -> None:
@@ -351,7 +359,7 @@ class Demo:
 
     def phase_ready(self) -> None:
         ex, plan = self.executor, self.plan
-        ex.hold(C.SETTLE_AT_START)
+        ex.hold(C.DROP_SETTLE_AT_START if self.release == "drop" else C.SETTLE_AT_START)
         arm = f"{self.side}_arm"
         ex.move_to({arm: plan["raise"]}, C.MOVE_TO_RAISE)
         ex.move_to({arm: plan["hover"]}, C.MOVE_TO_HOVER)
@@ -742,7 +750,7 @@ class Demo:
         if raise_joints is not None:
             ex.move_to({arm: raise_joints}, C.RETURN_SECONDS)
         ex.move_to({arm: scene.attention_pose[side]}, C.RETURN_SECONDS)
-        ex.hold(C.FINAL_SETTLE)  # settle to verify the object stands on its own
+        ex.hold(C.DROP_FINAL_SETTLE if self.release == "drop" else C.FINAL_SETTLE)  # settle to verify the object stands on its own
 
     PHASE_MESSAGES = {
         "perceive": "locating the object with the head camera",
@@ -885,7 +893,7 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
     # judged on resting in the basket. The original can pipeline keeps its 2mm margin.
     # A drop only has to end up in the basket (possibly on another object).
     if demo.release == "drop":
-        inside_basket = scene.object_in_basket()
+        inside_basket = scene.object_in_basket()  # not fallen out (stacking allowed)
     elif scene.grasp_target is not None:
         inside_basket = scene.object_resting_in_basket()
     else:

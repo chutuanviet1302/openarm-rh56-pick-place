@@ -132,24 +132,36 @@ class BinResult:
 
 
 class BinTask:
+    # Subclasses (bin_conveyor_task) swap these.
+    box, box_half, box_wall, known, drop_spots = BOX, BOX_HALF, BOX_WALL, KNOWN, DROP_SPOTS
+
     def __init__(self, layout=LAYOUT, *, pose_backend: str = "gt") -> None:
         self.layout = list(layout)
-        self.scene = build_scene(self.layout)
+        self.scene = self.build_scene()
         self.pose_backend = pose_backend
-        self.detector = ObjectDetector(self.scene.model, KNOWN, basket_xy=BOX, basket_margin=max(BOX_HALF) + 0.03)
+        self.detector = ObjectDetector(self.scene.model, self.known, basket_xy=self.box,
+                                       basket_margin=max(self.box_half) + 0.03)
         self.tracker = ObjectTracker()
         self.recorder = FrameRecorder(self.scene.data)
 
+    def build_scene(self) -> Scene:
+        return build_scene(self.layout)
+
     def enroll(self) -> None:
         def alone(key: str, yaw: float, pose: str = "upright") -> Scene:
-            return Scene((0.28, -0.27), BOX, work_platform_height=PLATFORM, pick_object=key, pick_pose=pose,
-                         pick_yaw_deg=yaw, basket_half_size=BOX_HALF, basket_wall_height=BOX_WALL)
+            return Scene((0.28, -0.27), self.box, work_platform_height=PLATFORM, pick_object=key, pick_pose=pose,
+                         pick_yaw_deg=yaw, basket_half_size=self.box_half, basket_wall_height=self.box_wall)
 
         self.detector.enroll(alone)
 
     def look(self) -> list:
         detections = self.detector.detect(self.scene.data, unique=False)
         self.tracker.update(detections, float(self.scene.data.time))
+        unknown = [d for d in detections if d.label is None]
+        if unknown:
+            print("   unidentified: " + "; ".join(
+                f"cost {d.cost:.0f} at {np.round(d.centroid[:2], 3).tolist()} {d.pixels}px {d.features.as_dict()}"
+                for d in unknown))
         return [d for d in detections if d.label is not None]
 
     def mask_source(self, name: str):
@@ -179,17 +191,25 @@ class BinTask:
         self.enroll()
         attempts: dict[str, int] = {}
         for arm in ("right", "left"):
-            spots = list(DROP_SPOTS[arm])
+            spots = list(self.drop_spots[arm])
+            empty_looks = 0
             while len(result.per_arm[arm]) < PICKS_PER_ARM:
                 detections = self.look()
                 mine = [d for d in detections if (d.centroid[1] < 0) == (arm == "right")]
                 mine = [d for d in mine if attempts.get(self.instance_of(d), 0) < MAX_ATTEMPTS]
                 seen = ", ".join(f"{d.label} at {np.round(d.centroid[:2], 3).tolist()}" for d in detections)
                 print(f"[look t={scene.data.time:6.1f}s] {seen or 'nothing on the table'}")
+                if not mine and empty_looks < 2 and any(
+                        (t.position[1] < 0) == (arm == "right") and t.missed <= 1 for t in self.tracker.tracks.values()):
+                    # Objects seen on this side a moment ago: look again before giving up.
+                    empty_looks += 1
+                    self._settle(0.5)
+                    continue
                 if not mine:
                     print(f"   nothing left for the {arm} arm")
                     break
-                detection = min(mine, key=lambda d: float(np.hypot(d.centroid[0] - BOX[0], d.centroid[1] - BOX[1])))
+                empty_looks = 0
+                detection = min(mine, key=lambda d: float(np.hypot(d.centroid[0] - self.box[0], d.centroid[1] - self.box[1])))
                 name = self.instance_of(detection)
                 attempts[name] = attempts.get(name, 0) + 1
                 spot = spots[0] if spots else (0.0, -0.06 if arm == "right" else 0.06)
@@ -216,10 +236,14 @@ class BinTask:
                     if spots:
                         spots.pop(0)
                 self._home(arm)
+        self.after_table(result)
         result.in_box = {name: scene.object_in_basket(name) for name in scene.object_types}
         result.sim_seconds = float(scene.data.time)
         result.wall_seconds = time.perf_counter() - started
         return result
+
+    def after_table(self, result: BinResult) -> None:
+        """Hook after both arms have cleared the table (bin_conveyor_task: the belt)."""
 
     def _settle(self, seconds: float) -> None:
         for _ in range(int(round(seconds / self.scene.model.opt.timestep))):
@@ -237,19 +261,34 @@ class BinTask:
         executor = Executor(scene)
         executor.viewer = self.recorder
         executor.active_side = side
-        executor.move_to({f"{side}_hand": scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS)}, C.RELEASE_SECONDS)
-        executor.move_to({f"{side}_arm": scene.attention_pose[side], f"{side}_hand": scene.rest_hand[side]},
-                         2.0 * C.RETURN_SECONDS)
+        try:
+            executor.move_to({f"{side}_hand": scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS)}, C.RELEASE_SECONDS)
+            # Straight up first: a failed pick can leave the hand low over the table or
+            # belt, and a direct blend home swept a finger into the belt.
+            from simulation.pick_place.kinematics import solve_pose_ik, wrist_frame
+
+            here = scene.data.ctrl[scene.arm_actuators[side]].copy()
+            position, rotation = wrist_frame(scene.model, side, here)
+            try:
+                up = solve_pose_ik(scene.model, side, position + np.array([0.0, 0.0, 0.12]), rotation, here)
+                executor.move_to({f"{side}_arm": up}, C.RETURN_SECONDS)
+            except RuntimeError:
+                pass
+
+            executor.move_to({f"{side}_arm": scene.attention_pose[side], f"{side}_hand": scene.rest_hand[side]},
+                             2.0 * C.RETURN_SECONDS)
+        except RuntimeError as error:
+            print(f"   (homing the {side} arm stopped: {str(error).splitlines()[0]})")
 
 
-def replay(path: Path, speed: float = 1.0) -> None:
+def replay(path: Path, speed: float = 1.0, scene_builder=build_scene) -> None:
     """Play a saved recording in the MuJoCo viewer at real speed, then keep the last
     frame up until the window is closed."""
     import mujoco.viewer
 
     recording = np.load(path)
     times, qpos, captions = recording["times"], recording["qpos"], recording["captions"]
-    scene = build_scene()
+    scene = scene_builder()
     model, data = scene.model, scene.data
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
@@ -293,8 +332,10 @@ def main(argv: list[str] | None = None) -> None:
         replay(args.replay, args.speed)
         return
     task = BinTask(pose_backend=args.pose_backend)
-    result = task.run()
-    task.recorder.save(args.frames)
+    try:
+        result = task.run()
+    finally:
+        task.recorder.save(args.frames)  # keep the recording even if the run crashed
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(asdict(result), indent=2, default=float), encoding="utf-8")
     print("\n" + result.summary())

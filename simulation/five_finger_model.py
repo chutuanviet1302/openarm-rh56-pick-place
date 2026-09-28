@@ -367,15 +367,22 @@ def build_five_finger_spec(
             basket_reach = np.array([bhx, bhy]) + BASKET_WALL_THICKNESS + footprint_radius(placement)
             if np.all(np.abs(xy - np.asarray(basket_position, dtype=float)) < basket_reach):
                 raise ValueError(f"{placement.key} overlaps the basket")
-        surface_z = TABLE_TOP_Z + work_platform_height
+        table_z = TABLE_TOP_Z + work_platform_height
         if conveyor is not None:
-            _add_conveyor(arm, conveyor, surface_z)
-            surface_z = conveyor.top_z(surface_z)
-        _add_object(arm, pick, surface_z, body="pick_bottle", joint="pick_bottle_joint",
+            _add_conveyor(arm, conveyor, table_z)
+
+        def surface_for(placement: Placement) -> float:
+            """The belt's top for an object standing on the belt strip, else the table
+            (or work platform) top."""
+            if conveyor is not None and abs(float(placement.xy[0]) - conveyor.x) <= 0.5 * conveyor.width:
+                return conveyor.top_z(table_z)
+            return table_z
+
+        _add_object(arm, pick, surface_for(pick), body="pick_bottle", joint="pick_bottle_joint",
                     collision="pick_bottle_collision", visual="ycb_mustard_bottle_visual")
         for placement in extras:
             name = object_body_name(placement.label)
-            _add_object(arm, placement, surface_z, body=name, joint=f"{name}_joint",
+            _add_object(arm, placement, surface_for(placement), body=name, joint=f"{name}_joint",
                         collision=f"{name}_collision", visual=f"{name}_visual")
         # Release point B. Full physical collision on all 4 walls, so a hand that comes
         # in too low is caught by the trajectory's basket-contact check.

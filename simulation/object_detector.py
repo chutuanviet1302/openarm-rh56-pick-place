@@ -39,6 +39,7 @@ from simulation.fp_bridge import HEIGHT, WIDTH, camera_pose_cv, intrinsics
 MIN_OBJECT_PIXELS = 150
 ABOVE_SURFACE_M = 0.008
 HEIGHT_STEP_M = 0.008       # neighbouring pixels further apart in height: an object edge
+DEPTH_STEP_M = 0.01         # neighbouring pixels further apart in range: an occlusion edge
 # Feature scales for the identity cost: a difference of one scale unit costs 1.
 SCALES = {"height": 0.012, "short": 0.012, "long": 0.012, "fill": 0.08, "hue": 0.06}
 MAX_COST = 12.0
@@ -157,6 +158,12 @@ class ObjectDetector:
         step = np.zeros_like(mask)
         step[:, :-1] |= np.abs(np.diff(zz, axis=1)) > HEIGHT_STEP_M
         step[:-1, :] |= np.abs(np.diff(zz, axis=0)) > HEIGHT_STEP_M
+        # ... and on a jump in range: where a nearer object occludes a farther one of
+        # the same height (an apple in front of an orange) there is no height step at
+        # the seam, only a depth one; the two merged into one unidentified blob.
+        rng = np.nan_to_num(depth, nan=0.0)
+        step[:, :-1] |= np.abs(np.diff(rng, axis=1)) > DEPTH_STEP_M
+        step[:-1, :] |= np.abs(np.diff(rng, axis=0)) > DEPTH_STEP_M
         labels, count = ndimage.label(mask & ~step, structure=np.ones((3, 3)))
         found = []
         for index in range(1, count + 1):

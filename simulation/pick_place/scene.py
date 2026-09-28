@@ -308,15 +308,23 @@ class Scene:
             geoms.add(self.model.geom(OBJECT_GEOM if body == "pick_bottle" else f"{body}_collision").id)
         return geoms
 
-    def object_in_basket(self, key: str | None = None, wall_contact: float = 0.002) -> bool:
-        """Dropped in: the object's footprint within the basket walls (touching them
-        allowed) and its lowest point below the rim -- on the floor or on another
-        object already in there."""
+    def object_in_basket(self, key: str | None = None) -> bool:
+        """Dropped in, i.e. not fallen out: the object's centre is over the box floor
+        (inside the walls), it hangs no higher than a hand-width over the rim (not
+        still held), and it touches neither the table, the platform nor the belt.
+        Resting on other objects in the box, even sticking out above the rim, counts."""
         key = key or self.pick_object
-        pose = self.object_pose(key)
-        points = collision_points(self.object_types[key]) @ pose[:3, :3].T + pose[:3, 3]
-        offset = np.abs(points[:, :2] - self.basket_floor()[:2])
-        return bool(np.all(offset <= self.basket_half + wall_contact) and points[:, 2].min() < self.basket_rim_z())
+        centre = self.object_position_of(key)
+        offset = np.abs(centre[:2] - self.basket_floor()[:2])
+        if np.any(offset > self.basket_half) or centre[2] > self.basket_rim_z() + 0.10:
+            return False
+        joint = self.model.joint(self.object_joints[key])
+        body = int(joint.bodyid[0])
+        for contact in self.data.contact[: self.data.ncon]:
+            geoms = (contact.geom1, contact.geom2)
+            if any(int(self.model.geom_bodyid[g]) == body for g in geoms) and any(g in self.table_geoms for g in geoms):
+                return False
+        return True
 
     def set_grasp_target(self, target: GraspTarget, side: str = "right") -> None:
         """Take the object as the grasp library says (grasp_library.select_grasp).

@@ -141,6 +141,11 @@ PLACE_DROP_HEIGHT = 0.02
 # Drop release (table clearing, Demo(release="drop")): the object's bottom this far
 # above the basket rim when the hand lets go.
 DROP_ABOVE_RIM = 0.015
+# Drop tasks (bin, conveyor) skip the long waits meant for a careful set-down: the arm
+# is already still at attention before a pick, and nothing has to be seen standing
+# after the release.
+DROP_SETTLE_AT_START = 0.3
+DROP_FINAL_SETTLE = 0.3
 # No standing XY bias: the object is centred over the basket from its own measured
 # position just before the set-down (Demo._centre_over_basket). The hand-tuned offsets
 # that used to live here were calibrated against one carry timing -- at 19.3mm long they
