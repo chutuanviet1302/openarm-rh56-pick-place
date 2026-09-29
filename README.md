@@ -1,5 +1,9 @@
 # OpenArm + Inspire Hand + D435 Pick & Place
 
+![Bàn + băng chuyền: 6/6 vật vào rổ, 196 s mô phỏng (x10)](docs/bin_conveyor_x10.gif)
+
+*Task bàn + băng chuyền trong MuJoCo: FoundationPose 6D, grasp library, mink QP, 2 tay — 6/6 vật vào rổ trong 196 s (phát x10). Tạo lại: `python -m scripts.make_replay_gif artifacts/bin_conveyor_mink_frames.npz --speed 10`. Báo cáo tuần: [docs/BAO_CAO_TIEN_DO_2026-10-02.pdf](docs/BAO_CAO_TIEN_DO_2026-10-02.pdf).*
+
 Pipeline ROS 2 theo thiết kế của mentor:
 
 `D435 RGB-D → /perception/object_pose (PoseStamped) → TF camera/base → MoveIt IK theo waypoint → FollowJointTrajectory 7-DOF → ros2_control`
