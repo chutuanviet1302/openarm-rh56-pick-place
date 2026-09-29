@@ -28,6 +28,7 @@ from simulation.policy.model import ChunkPolicy, EnsembledController
 CONTROL_PERIOD_S = 0.1
 MAX_SECONDS = 14.0
 PROOF_RISE_M = 0.03
+TRACK_TOLERANCE_M = 0.001
 DEFAULT_POLICY = Path("artifacts") / "policy" / "grasp_policy.pt"
 _CACHE: dict[Path, ChunkPolicy] = {}
 
@@ -66,18 +67,26 @@ class PolicyGraspDemo(Demo):
         start_z = float(scene.object_position()[2])
         started = float(data.time)
         light_grip = None
+        # The commanded wrist pose, integrated from the actions exactly as the demos'
+        # commands evolved; IK residuals then do not accumulate into it (taking the FK
+        # of the arm command as the base each step, the command drifted 4 cm up while
+        # a demo's own actions were replayed -- the oracle check).
+        cmd_p, cmd_r = wrist_frame(self.model, side, data.ctrl[scene.arm_actuators[side]])
+        command = np.eye(4)
+        command[:3, :3], command[:3, 3] = cmd_r, cmd_p
         while float(data.time) - started < MAX_SECONDS:
             wrist = np.eye(4)
             wrist[:3, :3], wrist[:3, 3] = scene.wrist_rotation(side), scene.wrist_position(side)
             forces = scene.finger_contact_forces(side)
             obs = observation(data.qpos[scene.arm_qpos[side]], data.qpos[scene.hand_qpos[side]],
                               [forces.get(f, 0.0) for f in FINGER_ORDER], wrist, self.perceived_pose, kind, rest)
-            # The action steps the COMMANDED wrist pose (features.action).
-            cmd_p, cmd_r = wrist_frame(self.model, side, data.ctrl[scene.arm_actuators[side]])
-            command = np.eye(4)
-            command[:3, :3], command[:3, 3] = cmd_r, cmd_p
-            target, hand = apply_action(command, controller(obs))
-            arm_q = mink_arm.converge(target, iterations=30)
+            # The action steps the commanded wrist pose (features.action).
+            command, hand = apply_action(command, controller(obs))
+            # Track it tightly: the posture term only keeps the arm where it is.
+            q_now = data.qpos.copy()
+            q_now[scene.arm_qpos[side]] = data.ctrl[scene.arm_actuators[side]]
+            mink_arm.posture.set_target(q_now)
+            arm_q = mink_arm.converge(command, iterations=150, tolerance_m=TRACK_TOLERANCE_M)
             data.ctrl[scene.hand_actuators[side]] = hand
             if light_grip is None and sum(f > 0.5 for f in forces.values()) >= 3:
                 light_grip = data.ctrl[scene.hand_actuators[side]].copy()
