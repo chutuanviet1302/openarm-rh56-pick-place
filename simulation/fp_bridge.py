@@ -153,4 +153,9 @@ def estimate_pose(scene, key: str | None = None, camera: str = "d435_head", work
     if frame.mask.sum() < 100:
         raise RuntimeError(f"perception failed: {key} covers only {int(frame.mask.sum())} px in '{camera}'")
     directory = frame.export(workdir or PROJECT_ROOT / "artifacts" / "fp_frames" / key)
-    return frame.T_world_cam @ run_foundationpose(directory)
+    try:
+        return frame.T_world_cam @ run_foundationpose(directory)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        # The first call after WSL was idle failed once (exit 1) and ran fine straight
+        # after: one retry.
+        return frame.T_world_cam @ run_foundationpose(directory)

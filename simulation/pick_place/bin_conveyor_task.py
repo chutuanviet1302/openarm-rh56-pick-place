@@ -89,7 +89,7 @@ class BinConveyorTask(BinTask):
     box, box_half, box_wall, known, drop_spots = BOX, BOX_HALF, BOX_WALL, KNOWN, DROP_SPOTS
     keep_over_last = False      # the left arm is done after the table: it goes home at once
 
-    def __init__(self, *, pose_backend: str = "gt") -> None:
+    def __init__(self, *, pose_backend: str = "foundationpose") -> None:
         super().__init__(TABLE_OBJECTS, pose_backend=pose_backend)
         belt_x = (BELT.x - 0.5 * BELT.width, BELT.x + 0.5 * BELT.width)
         # The table look stops short of the belt: its top stands 1 cm over the
@@ -235,7 +235,7 @@ class BinConveyorTask(BinTask):
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Bin task, then two more objects off a moving conveyor")
-    parser.add_argument("--pose-backend", default="gt", choices=("gt", "foundationpose"))
+    parser.add_argument("--pose-backend", default="foundationpose", choices=("gt", "foundationpose"))
     parser.add_argument("--frames", type=Path, default=Path("artifacts") / "bin_conveyor_frames.npz")
     parser.add_argument("--report", type=Path, default=Path("artifacts") / "bin_conveyor.json")
     parser.add_argument("--no-view", action="store_true")

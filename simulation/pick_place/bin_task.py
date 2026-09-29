@@ -36,6 +36,7 @@ from simulation.object_detector import ObjectDetector, ObjectTracker
 from simulation.objects import Placement
 from simulation.pick_place import config as C
 from simulation.pick_place.demo import Demo, run_trial
+from simulation.pick_place.pose_overlay import PoseEventLog, add_pose_markers
 from simulation.pick_place.scene import Scene
 
 PLATFORM = 0.10
@@ -61,6 +62,7 @@ MAX_ATTEMPTS = 2
 # spot per pick.
 DROP_SPOTS = {"right": [(-0.04, -0.06), (0.0, -0.06)], "left": [(-0.04, 0.06), (0.04, 0.06)]}
 FRAME_SECONDS = 1.0 / 60.0
+POSE_SHOW_SECONDS = 12.0   # replay: how long a 6D estimate stays drawn
 SETTLE_AFTER_DROP_S = 0.5
 
 
@@ -86,6 +88,7 @@ class FrameRecorder:
         self.qpos: list[np.ndarray] = []
         self.captions: list[str] = []
         self.caption = ""
+        self.extra: dict[str, np.ndarray] = {}  # saved alongside (the 6D pose events)
 
     def is_running(self) -> bool:
         return True
@@ -100,7 +103,7 @@ class FrameRecorder:
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(path, times=np.asarray(self.times), qpos=np.asarray(self.qpos),
-                            captions=np.asarray(self.captions))
+                            captions=np.asarray(self.captions), **self.extra)
 
 
 @dataclass
@@ -146,6 +149,7 @@ class BinTask:
                                        basket_margin=max(self.box_half) + 0.03)
         self.tracker = ObjectTracker()
         self.recorder = FrameRecorder(self.scene.data)
+        self.pose_log = PoseEventLog(self.scene)
 
     def build_scene(self) -> Scene:
         return build_scene(self.layout)
@@ -187,6 +191,16 @@ class BinTask:
         return min(candidates, key=lambda n: float(np.linalg.norm(scene.object_position_of(n)[:2] - detection.centroid[:2])))
 
     def run(self) -> BinResult:
+        from simulation.pick_place import pose_source
+
+        pose_source.POSE_LISTENERS.append(self.pose_log)
+        try:
+            return self._run()
+        finally:
+            pose_source.POSE_LISTENERS.remove(self.pose_log)
+            self.recorder.extra = self.pose_log.arrays()
+
+    def _run(self) -> BinResult:
         started = time.perf_counter()
         result = BinResult(self.pose_backend)
         scene = self.scene
@@ -324,6 +338,12 @@ def replay(path: Path, speed: float = 1.0, scene_builder=build_scene) -> None:
         pass
     recording = np.load(path)
     times, qpos, captions = recording["times"], recording["qpos"], recording["captions"]
+    # 6D pose events (recordings from before they existed have none).
+    pose_times = recording["pose_times"] if "pose_times" in recording else np.zeros(0)
+    if len(pose_times):
+        pose_names, pose_mats = recording["pose_names"], recording["pose_mats"]
+        pose_boxes, pose_images = recording["pose_boxes"], recording["pose_images"]
+    shown = -1
     scene = scene_builder()
     model, data = scene.model, scene.data
     with mujoco.viewer.launch_passive(model, data) as viewer:
@@ -339,6 +359,24 @@ def replay(path: Path, speed: float = 1.0, scene_builder=build_scene) -> None:
                 data.qpos[:] = q
                 data.time = float(t)
                 mujoco.mj_kinematics(model, data)
+                # The latest estimate, shown for POSE_SHOW_SECONDS: its box and axes in
+                # 3-D, and the annotated head-camera image in the bottom-left corner.
+                current = int(np.searchsorted(pose_times, float(t), side="right")) - 1
+                if current >= 0 and float(t) - float(pose_times[current]) > POSE_SHOW_SECONDS:
+                    current = -1
+                viewer.user_scn.ngeom = 0
+                if current >= 0:
+                    add_pose_markers(viewer.user_scn, pose_mats[current], pose_boxes[current])
+                if current != shown:
+                    shown = current
+                    try:
+                        if current >= 0:
+                            viewer.set_images((mujoco.MjrRect(0, 0, pose_images.shape[2], pose_images.shape[1]),
+                                               np.ascontiguousarray(pose_images[current])))
+                        else:
+                            viewer.clear_images()
+                    except (AttributeError, TypeError) as error:
+                        print(f"(camera inset unavailable: {error})")
                 if text != caption:
                     caption = text
                     try:
@@ -358,7 +396,7 @@ def replay(path: Path, speed: float = 1.0, scene_builder=build_scene) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Both arms drop two objects each into a box")
-    parser.add_argument("--pose-backend", default="gt", choices=("gt", "foundationpose"))
+    parser.add_argument("--pose-backend", default="foundationpose", choices=("gt", "foundationpose"))
     parser.add_argument("--frames", type=Path, default=Path("artifacts") / "bin_task_frames.npz")
     parser.add_argument("--report", type=Path, default=Path("artifacts") / "bin_task.json")
     parser.add_argument("--no-view", action="store_true", help="simulate and save only")

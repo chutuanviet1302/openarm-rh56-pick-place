@@ -17,6 +17,9 @@ from __future__ import annotations
 import numpy as np
 
 BACKENDS = ("gt", "color", "foundationpose")
+# Called as listener(scene, key, backend, pose, camera) after every estimate
+# (pose_overlay.PoseEventLog: the 6D box + axes display).
+POSE_LISTENERS: list = []
 
 
 def get_object_pose(scene, key: str | None = None, backend: str = "gt", camera: str = "d435_head",
@@ -24,6 +27,13 @@ def get_object_pose(scene, key: str | None = None, backend: str = "gt", camera: 
     """`mask`: the object's pixels from the detector (object_detector.py); used by
     FoundationPose, which otherwise falls back to the simulator's segmentation."""
     key = key or scene.pick_object
+    pose = _estimate(scene, key, backend, camera, mask)
+    for listener in POSE_LISTENERS:
+        listener(scene, key, backend, pose, camera)
+    return pose
+
+
+def _estimate(scene, key: str, backend: str, camera: str, mask: np.ndarray | None) -> np.ndarray:
     if backend == "gt":
         return scene.object_pose(key)
     if backend == "color":

@@ -166,6 +166,7 @@ class Demo:
         scene = self.scene
         mask = self.mask_source() if self.mask_source is not None else self.detection_mask
         pose = get_object_pose(scene, scene.pick_object, self.pose_backend, self.perception_camera, mask=mask)
+        pose = _upright_axial(scene.pick_type, pose)
         self._check_pose_plausible(pose)
         spec = OBJECTS[scene.pick_type]
         translation, rotation = pose_error(pose, scene.object_pose(), spec.symmetry, _keep_axis(scene.pick_type, pose))
@@ -892,6 +893,20 @@ class Demo:
     def _solve_poses(self) -> dict[str, dict[str, np.ndarray]]:
         self.plan = self.planner.plan(self.object_position())
         return {self.side: {**self.plan.joints, **{f"{k}_path": v for k, v in self.plan.paths.items()}}}
+
+
+def _upright_axial(key: str, pose: np.ndarray) -> np.ndarray:
+    """An axially symmetric object (the can) estimated upside down is turned the right
+    way up (180 deg about its own x axis): top and bottom differ only by the lid, which
+    FoundationPose confused on the belt (axis 180 deg from vertical, twice), and every
+    wrap grasp in the library holds the can by its middle anyway."""
+    from simulation.objects import OBJECTS
+
+    if OBJECTS[key].symmetry != "axial" or float(pose[2, 2]) > -np.cos(np.radians(45.0)):
+        return pose
+    flipped = pose.copy()
+    flipped[:3, :3] = pose[:3, :3] @ np.diag([1.0, -1.0, -1.0])
+    return flipped
 
 
 def _keep_axis(key: str, pose: np.ndarray):
