@@ -61,6 +61,7 @@ MAX_ATTEMPTS = 2
 # spot per pick.
 DROP_SPOTS = {"right": [(-0.04, -0.06), (0.0, -0.06)], "left": [(-0.04, 0.06), (0.04, 0.06)]}
 FRAME_SECONDS = 1.0 / 60.0
+SETTLE_AFTER_DROP_S = 0.5
 
 
 def build_scene(layout=LAYOUT) -> Scene:
@@ -134,8 +135,10 @@ class BinResult:
 class BinTask:
     # Subclasses (bin_conveyor_task) swap these.
     box, box_half, box_wall, known, drop_spots = BOX, BOX_HALF, BOX_WALL, KNOWN, DROP_SPOTS
+    keep_over_last = False      # leave the last arm over the box for the next phase
 
     def __init__(self, layout=LAYOUT, *, pose_backend: str = "gt") -> None:
+        self.arm_over: dict[str, Demo] = {}
         self.layout = list(layout)
         self.scene = self.build_scene()
         self.pose_backend = pose_backend
@@ -191,6 +194,7 @@ class BinTask:
         self.enroll()
         attempts: dict[str, int] = {}
         for arm in ("right", "left"):
+            over: Demo | None = None  # the demo whose release left this arm over the box
             spots = list(self.drop_spots[arm])
             empty_looks = 0
             while len(result.per_arm[arm]) < PICKS_PER_ARM:
@@ -199,6 +203,12 @@ class BinTask:
                 mine = [d for d in mine if attempts.get(self.instance_of(d), 0) < MAX_ATTEMPTS]
                 seen = ", ".join(f"{d.label} at {np.round(d.centroid[:2], 3).tolist()}" for d in detections)
                 print(f"[look t={scene.data.time:6.1f}s] {seen or 'nothing on the table'}")
+                if not mine and over is not None:
+                    # The arm parked over the box hides the far side from the camera:
+                    # go home, then look again.
+                    over.return_home()
+                    over = None
+                    continue
                 if not mine and empty_looks < 2 and any(
                         (t.position[1] < 0) == (arm == "right") and t.missed <= 1 for t in self.tracker.tracks.values()):
                     # Objects seen on this side a moment ago: look again before giving up.
@@ -217,10 +227,12 @@ class BinTask:
                 self.recorder.caption = f"{arm} arm -> {detection.label} ({name})"
                 scene.set_target(name)
                 demo = Demo(scene=scene, side=arm, pose_backend=self.pose_backend, release="drop",
-                            place_offset=spot, detection_mask=detection.mask, mask_source=self.mask_source(name))
+                            place_offset=spot, detection_mask=detection.mask, mask_source=self.mask_source(name),
+                            stay_over_basket=True, start_over_basket=over is not None)
                 trial = run_trial(demo, self.recorder)
-                self._settle(1.0)
+                self._settle(SETTLE_AFTER_DROP_S)
                 ok = scene.object_in_basket(name)
+                over = demo if trial.failure_reason is None else None
                 slip = None
                 if trial.proof_lift_hand_rise_m is not None and trial.proof_lift_rise_m is not None:
                     slip = round((trial.proof_lift_hand_rise_m - trial.proof_lift_rise_m) * 1000, 1)
@@ -230,12 +242,19 @@ class BinTask:
                     trial.failed_phase, slip, np.round(scene.object_position_of(name), 4).tolist(),
                 ))
                 print(f"   -> {'IN THE BOX' if ok else 'FAILED: ' + str(result.picks[-1].failure)}")
+                if trial.failure_reason:
+                    print(f"   (episode error: {trial.failure_reason.splitlines()[0][:200]})")
                 self.recorder.caption = f"{arm} arm: {name} {'in the box' if ok else 'missed'}"
                 if ok:
                     result.per_arm[arm].append(name)
                     if spots:
                         spots.pop(0)
-                self._home(arm)
+                if over is None:
+                    self._home(arm)
+            if over is not None and (self.keep_over_last and arm == "left"):
+                self.arm_over[arm] = over  # the belt phase picks up from here
+            elif over is not None:
+                over.return_home()  # the other arm must find this one at rest
         self.after_table(result)
         result.in_box = {name: scene.object_in_basket(name) for name in scene.object_types}
         result.sim_seconds = float(scene.data.time)
@@ -281,16 +300,34 @@ class BinTask:
             print(f"   (homing the {side} arm stopped: {str(error).splitlines()[0]})")
 
 
+def _gl_renderer() -> str:
+    try:
+        from OpenGL import GL
+
+        context = mujoco.GLContext(64, 64)
+        context.make_current()
+        return GL.glGetString(GL.GL_RENDERER).decode()
+    except Exception:  # noqa: BLE001 - informational only
+        return "unknown (Windows: Settings > System > Display > Graphics > python.exe > High performance)"
+
+
 def replay(path: Path, speed: float = 1.0, scene_builder=build_scene) -> None:
     """Play a saved recording in the MuJoCo viewer at real speed, then keep the last
     frame up until the window is closed."""
     import mujoco.viewer
 
+    import ctypes
+
+    try:
+        ctypes.windll.winmm.timeBeginPeriod(1)  # 1 ms sleeps: the default 15.6 ms made playback stutter
+    except (AttributeError, OSError):
+        pass
     recording = np.load(path)
     times, qpos, captions = recording["times"], recording["qpos"], recording["captions"]
     scene = scene_builder()
     model, data = scene.model, scene.data
     with mujoco.viewer.launch_passive(model, data) as viewer:
+        print("OpenGL renderer:", _gl_renderer())
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
         viewer.cam.lookat[:] = [0.30, 0.0, 0.20]
         viewer.cam.azimuth, viewer.cam.elevation, viewer.cam.distance = 180.0, -35.0, 1.45

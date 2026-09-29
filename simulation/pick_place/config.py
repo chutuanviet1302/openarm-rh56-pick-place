@@ -126,6 +126,8 @@ CARRY_CLEARANCE_ABOVE_RIM = 0.05
 # The servos sag under the can's weight, so the plan asks for this much extra; the
 # requirement above is what gets checked.
 CARRY_CLEARANCE_MARGIN = 0.01
+# Drop tasks lift this much extra over the rim rule (the transfer sags 1-2cm under load).
+DROP_CARRY_MARGIN = 0.025
 # Arm links (2..7) and hand vs the robot's own torso/pedestal, planned clearance.
 ARM_BODY_CLEARANCE = 0.03  # 15mm planned at a grasp became 0.4mm after the proof lift re-solved the elbow
 LIFT_PATH_STEPS = 8

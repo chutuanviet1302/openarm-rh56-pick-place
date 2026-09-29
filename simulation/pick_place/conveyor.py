@@ -56,9 +56,13 @@ BELT_RAMP_S = 1.0
 # the right arm; plan checks at the intercepts below).
 INTERCEPT_Y = {"left": 0.27, "right": -0.27}
 PICKS_PER_ARM = 2
+# Belt proof-lift slip limit: the hand settles into the object while the belt still
+# drags it (an orange measured 11 mm and then carried fine); a grip that is really
+# failing is caught by the rim check and the box check.
+BELT_PROOF_LIFT_SLIP_M = 0.015
 LOOK_PERIOD_S = 0.5
 MIN_LOOKS_FOR_VELOCITY = 3
-INTERCEPT_MARGIN_S = 1.5
+INTERCEPT_MARGIN_S = 3.0
 MAX_SIM_SECONDS = 240.0
 # Spacing on the belt for one arm at a time: a pick takes ~30 s of sim time (start
 # of the approach to back at attention, first conveyor run), 8.5 s of it before the
@@ -105,6 +109,9 @@ class ConveyorDemo(Demo):
         self.observe = observe
         self.grasp_wrist: np.ndarray | None = None
         self.grasp_time = 0.0
+        # No retry on the spot: by the time the hand has let go, the belt has carried
+        # the object away; the task hands it to the other arm instead.
+        self.grasp_retries = 0
 
     # ---------------------------------------------------------------- prediction
     def planning_pose(self, observed: np.ndarray) -> np.ndarray:
@@ -216,7 +223,7 @@ class ConveyorDemo(Demo):
         and without the belt-following lift) -- it settles into a three-finger grip. A
         grip that is really failing is still caught after: the re-grip and the
         carry-clearance checks over the basket rim. A loosened limit, stated."""
-        return C.PROOF_LIFT_SLIP_LIMIT["right"], C.PROOF_LIFT_TILT_LIMIT_DEG["right"]
+        return BELT_PROOF_LIFT_SLIP_M, C.PROOF_LIFT_TILT_LIMIT_DEG["right"]
 
     def proof_lift(self, grasp_orientation: np.ndarray) -> tuple[float, float, float]:
         """The proof lift, still travelling with the belt: the wrist rises
@@ -245,7 +252,7 @@ class ConveyorDemo(Demo):
         grasped on the move can settle lower in the grip than planned (an orange
         cleared the rim by 4.2 cm for a 5 cm rule, first conveyor run)."""
         scene = self.scene
-        needed = scene.carry_bottom_z() + C.CARRY_CLEARANCE_MARGIN - scene.object_bottom_z()
+        needed = scene.carry_bottom_z() + C.DROP_CARRY_MARGIN - scene.object_bottom_z()
         wrist_z = float(scene.wrist_position(self.side)[2])
         self.plan.centers["lift"][2] = max(float(self.plan.centers["lift"][2]), wrist_z + needed)
         super().lift_straight_up()

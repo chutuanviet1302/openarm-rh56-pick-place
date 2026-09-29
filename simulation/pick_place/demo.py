@@ -43,6 +43,8 @@ class Demo:
         release: str = "set_down",
         detection_mask: np.ndarray | None = None,
         mask_source=None,
+        stay_over_basket: bool = False,
+        start_over_basket: bool = False,
     ) -> None:
         """`pose_backend` ('gt', 'color', 'foundationpose'; pose_source.py): perceive
         the object's full 6D pose and take it as the grasp library says for that pose.
@@ -74,6 +76,8 @@ class Demo:
         self.pose_backend = pose_backend
         self.perceived_pose: np.ndarray | None = None
         self.grasp_options: list = []
+        # Physically rejected grasps let go of and retried with another heading.
+        self.grasp_retries = C.GRASP_RETRIES
         # "set_down": lower until the object rests on the basket floor (the can
         # pipeline); "drop": let go just above the rim (table clearing: the basket may
         # already hold other objects, the object need not stand).
@@ -87,6 +91,11 @@ class Demo:
         # retry included) uses a current mask; a failed grasp moves the object, and a
         # stale mask put FoundationPose 92 mm off, below the table (bin task, peach).
         self.mask_source = mask_source
+        # Chained picks: stay_over_basket ends the episode at the carry pose above the
+        # basket instead of going back to attention (return_home() does that later);
+        # start_over_basket starts the next episode from that pose.
+        self.stay_over_basket = stay_over_basket
+        self.start_over_basket = start_over_basket
         self.plan: Plan | None = None
         self.light_grip_ctrl: np.ndarray | None = None
         self.failed_grasp_yaws: list[float] = []
@@ -273,6 +282,13 @@ class Demo:
         (2026-09-24). Falls back to the planned joint-space move if the line has no IK."""
         ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
         arm = f"{side}_arm"
+        if self.release == "drop":
+            # Lift high enough for the object as it actually hangs in the hand: a far
+            # pick sags the servos and settles the object lower than planned (apple
+            # 3.3cm, peach -8cm over the rim for a 5cm rule).
+            needed = scene.carry_bottom_z() + C.DROP_CARRY_MARGIN - scene.object_bottom_z()
+            wrist_z = float(scene.wrist_position(side)[2])
+            plan.centers["lift"][2] = max(float(plan.centers["lift"][2]), wrist_z + needed)
         if plan.lift_twist_deg:
             ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
             return
@@ -359,11 +375,40 @@ class Demo:
 
     def phase_ready(self) -> None:
         ex, plan = self.executor, self.plan
-        ex.hold(C.DROP_SETTLE_AT_START if self.release == "drop" else C.SETTLE_AT_START)
         arm = f"{self.side}_arm"
+        if self.start_over_basket and self._direct_to_hover():
+            ex.move_to({arm: plan["hover"]}, C.MOVE_TO_HOVER)
+            ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
+            return
+        if self.start_over_basket:
+            self.return_home_from_here()
+        ex.hold(C.DROP_SETTLE_AT_START if self.release == "drop" else C.SETTLE_AT_START)
         ex.move_to({arm: plan["raise"]}, C.MOVE_TO_RAISE)
         ex.move_to({arm: plan["hover"]}, C.MOVE_TO_HOVER)
         ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
+
+    def _direct_to_hover(self) -> bool:
+        """Is the joint blend from where the arm stands (over the basket) to this plan's
+        hover clear of the basket, the table and the objects?"""
+        scene, side = self.scene, self.side
+        here = self.data.ctrl[scene.arm_actuators[side]].copy()
+        obstacles = scene.basket_geoms | {scene.object_geom} | scene.table_geoms | scene.other_object_geoms()
+        blocked = self.planner.blend_contacts(here, self.plan["hover"], obstacles)
+        if blocked:
+            self.log.note(f"direct move to the hover is blocked ({sorted(blocked)}); going home first")
+        return not blocked
+
+    def return_home_from_here(self) -> None:
+        """Back to attention from the pose a stay_over_basket episode ended in."""
+        ex, scene, side = self.executor, self.scene, self.side
+        from simulation.pick_place.kinematics import solve_pose_ik, wrist_frame
+
+        here = self.data.ctrl[scene.arm_actuators[side]].copy()
+        position, rotation = wrist_frame(self.model, side, here)
+        up = solve_pose_ik(self.model, side, position + np.array([0.0, 0.0, 0.10]), rotation, here)
+        ex.move_to({f"{side}_arm": up}, C.RETURN_SECONDS)
+        ex.move_to({f"{side}_arm": scene.attention_pose[side]}, 2.0 * C.RETURN_SECONDS)
+        ex.hold(0.3)
 
     def phase_reach(self) -> None:
         ex, plan, scene = self.executor, self.plan, self.scene
@@ -496,7 +541,14 @@ class Demo:
         self.log.note(f"object bottom is {clearance*100:+.1f}cm above the basket rim; transferring A -> B")
         path = plan.paths["transfer"]
         ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
-        self._check_carry_clearance("transfer")
+        try:
+            self._check_carry_clearance("transfer")
+        except RuntimeError as error:
+            # A drop only needs the object over the box: one that sagged (or slid) low
+            # on the way is let go where it is; the box check afterwards decides.
+            if self.release != "drop":
+                raise
+            self.log.note(f"{error}; dropping anyway")
         if self.release == "drop":
             self._lower_to_drop_height()
             return
@@ -731,6 +783,15 @@ class Demo:
         self.log.record("release_retreat_displacement_m", float(np.linalg.norm(object_after_retreat - object_after_open)))
         self.log.record("release_lateral_drift_m", float(np.linalg.norm((object_after_retreat - object_before)[:2])))
         ex.open_fingers(side, ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
+        if self.stay_over_basket:
+            # Next pick starts from here: only the fist closes, over the basket.
+            ex.move_to({hand: scene.rest_hand[side]}, 0.6)
+            return
+        self.return_home()
+
+    def return_home(self) -> None:
+        ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
+        arm, hand = f"{side}_arm", f"{side}_hand"
         # Continue home after clearing the basket.
         ex.move_to({arm: plan["hover"], hand: scene.rest_hand[side]}, C.RETURN_SECONDS)
         # Back the way it came, via a raise point re-chosen now that the object stands
@@ -778,7 +839,7 @@ class Demo:
                 # A grasp the physics rejects (a finger not pressing, the proof lift
                 # leaving the object behind) is retried with the next grasp heading:
                 # IK feasibility alone does not tell which heading holds the can.
-                if name != "grasp" or len(self.failed_grasp_yaws) >= C.GRASP_RETRIES:
+                if name != "grasp" or len(self.failed_grasp_yaws) >= self.grasp_retries:
                     raise
                 self.failed_grasp_yaws.append(float(self.plan.grasp_key))
                 self.log.note(f"grasp at yaw {self.plan.grasp_yaw_deg:+.0f} rejected ({error}); letting go and retrying")

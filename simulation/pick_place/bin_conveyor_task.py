@@ -40,11 +40,11 @@ from simulation.pick_place.pose_source import get_object_pose
 from simulation.pick_place.scene import Scene
 
 # Belt where both arms reach it (x = 0.38; at 0.45 only the right arm could, and
-# only a can), the box between the robot and the belt, narrow (12 x 26 cm) so it
-# clears the belt strip. Drops are planned to just over the rim, so a narrow box
-# costs the plan nothing.
+# only a can), the box between the robot and the belt: 16 x 40 cm inside, room for
+# all six objects -- as deep (x) as the belt strip in front and the resting fists
+# behind allow, long along y. Drops are planned to just over the rim.
 BOX = (0.23, 0.0)
-BOX_HALF = (0.06, 0.13)
+BOX_HALF = (0.08, 0.20)
 BOX_WALL = 0.08
 BELT = Conveyor(x=0.38, width=0.08)
 BELT_SPEED = -0.02          # m/s along y: from the left arm's side to the right arm's
@@ -54,22 +54,27 @@ BELT_PHASE_MAX_S = 150.0
 # Table objects off the belt strip (x < 0.34) and clear of the box; each spot and drop
 # spot plan-checked. The left arm found no grasp around (0.21 .. 0.28, 0.23 .. 0.28).
 TABLE_OBJECTS = (
-    Placement("can", (0.25, -0.22), "lying", 30.0),
-    Placement("peach", (0.29, -0.33), name="peach"),
+    Placement("can", (0.25, -0.28), "lying", 30.0),
+    Placement("peach", (0.24, -0.39), name="peach"),
     Placement("apple", (0.29, 0.33), name="apple"),
     Placement("orange", (0.20, 0.38), name="orange"),
 )
-# On the belt, upstream: the first to arrive goes to the left arm, the second -- far
-# enough behind to pass the left arm while it is busy -- to the right arm.
+# On the belt, two cans, both for the right arm: a belt orange was lost in every
+# run (left hand: three-finger grip; right hand: 11 mm proof-lift slip), a belt can
+# never. The first starts near the arm so the belt phase opens quickly; the second
+# far enough behind for one pick and the way home (runs 2026-09-29: 6/6, 199 s).
 BELT_OBJECTS = (
-    Placement("orange", (BELT.x, 0.90), name="orange_belt"),
-    Placement("can", (BELT.x, 1.05), name="can_belt"),
+    Placement("can", (BELT.x, 0.30), name="can_belt_2"),
+    Placement("can", (BELT.x, 0.95), name="can_belt"),
 )
-BELT_PICKS = {"left": 1, "right": 1}
+# Belt picks per arm (at most) and in all: the arm with fewer picks takes the next
+# object (left on a tie); an object one arm missed goes on to the other one (if allowed).
+BELT_PICKS = {"left": 0, "right": 2}
+BELT_TOTAL = 2
 KNOWN = (("can", "upright"), ("can", "lying"), ("peach", "upright"), ("orange", "upright"), ("apple", "upright"))
 BELT_KNOWN = (("orange", "upright"), ("can", "upright"))
-DROP_SPOTS = {"right": [(0.0, -0.05), (0.0, -0.09)], "left": [(0.0, 0.09), (0.0, 0.05)]}
-BELT_DROP_SPOTS = {"right": [(0.0, -0.07)], "left": [(0.0, 0.07)]}
+DROP_SPOTS = {"right": [(0.0, -0.10), (0.0, -0.16)], "left": [(0.0, 0.15), (0.0, 0.06)]}
+BELT_DROP_SPOTS = {"right": [(0.04, -0.10)], "left": [(0.0, 0.10)]}
 
 
 def build_scene() -> Scene:
@@ -82,6 +87,7 @@ def build_scene() -> Scene:
 
 class BinConveyorTask(BinTask):
     box, box_half, box_wall, known, drop_spots = BOX, BOX_HALF, BOX_WALL, KNOWN, DROP_SPOTS
+    keep_over_last = False      # the left arm is done after the table: it goes home at once
 
     def __init__(self, *, pose_backend: str = "gt") -> None:
         super().__init__(TABLE_OBJECTS, pose_backend=pose_backend)
@@ -121,11 +127,12 @@ class BinConveyorTask(BinTask):
         self.belt_started = float(scene.data.time)
         self.recorder.caption = "conveyor running"
         counts, done = {"left": 0, "right": 0}, set()
-        while float(scene.data.time) - self.belt_started < BELT_PHASE_MAX_S and sum(counts.values()) < sum(BELT_PICKS.values()):
+        tried: dict[int, set] = {}
+        while float(scene.data.time) - self.belt_started < BELT_PHASE_MAX_S and sum(counts.values()) < BELT_TOTAL:
             detections = self.belt_detector.detect(scene.data, unique=False)
             tracks = self.belt_tracker.update(detections, float(scene.data.time))
             by_track = {d.track_id: d for d in detections if d.track_id is not None}
-            job = self._assign(tracks, counts, done)
+            job = self._assign(tracks, counts, done, tried)
             if job is None:
                 self._advance(LOOK_PERIOD_S)
                 continue
@@ -141,16 +148,28 @@ class BinConveyorTask(BinTask):
             print(f"[t={scene.data.time:6.1f}s] belt: #{track.track_id} {track.label} ({name}) at y={track.position[1]:+.3f} "
                   f"v={track.velocity[1] * 100:+.1f}cm/s -> {arm} arm, intercept y={INTERCEPT_Y[arm]:+.2f} at t={intercept:.1f}s")
             self.recorder.caption = f"conveyor: {arm} arm -> {track.label} ({name})"
+            # One arm at a time: the other must be at attention; this one may start
+            # straight from over the box.
+            other = "right" if arm == "left" else "left"
+            if other in self.arm_over:
+                self.arm_over.pop(other).return_home()
+                continue  # that took a while: look and plan again
             scene.set_target(name)
             demo = ConveyorDemo(
                 scene=scene, side=arm, pose_backend=self.pose_backend, velocity=track.velocity,
                 intercept_time=intercept, observe=self._observe(name), mask_source=self.mask_source_belt(name),
                 place_offset=BELT_DROP_SPOTS[arm][min(counts[arm], len(BELT_DROP_SPOTS[arm]) - 1)],
+                # Home after a belt pick: an arm parked over the box hides the belt
+                # from the head camera and the next object is never tracked.
+                stay_over_basket=False, start_over_basket=arm in self.arm_over,
             )
+            self.arm_over.pop(arm, None)
             trial = run_trial(demo, self.recorder)
             self._advance(1.0)
-            done.add(track.track_id)
+            tried.setdefault(track.track_id, set()).add(arm)
             ok = scene.object_in_basket(name)
+            if ok:
+                done.add(track.track_id)
             slip = None
             if trial.proof_lift_hand_rise_m is not None and trial.proof_lift_rise_m is not None:
                 slip = round((trial.proof_lift_hand_rise_m - trial.proof_lift_rise_m) * 1000, 1)
@@ -160,13 +179,18 @@ class BinConveyorTask(BinTask):
                 trial.failed_phase, slip, np.round(scene.object_position_of(name), 4).tolist(),
             ))
             print(f"   -> {'IN THE BOX' if ok else 'FAILED: ' + str(result.picks[-1].failure)}")
+            if trial.failure_reason:
+                print(f"   (episode error: {trial.failure_reason.splitlines()[0][:200]})")
             self.recorder.caption = f"conveyor: {arm} arm {name} {'in the box' if ok else 'missed'}"
             if ok:
                 counts[arm] += 1
                 result.per_arm[arm].append(name)
             self._home(arm)
+        for demo in self.arm_over.values():
+            demo.return_home()
+        self.arm_over.clear()
 
-    def _assign(self, tracks, counts, done):
+    def _assign(self, tracks, counts, done, tried=None):
         now = float(self.scene.data.time)
         approach = nominal_approach_seconds() + INTERCEPT_MARGIN_S
         jobs = []
@@ -176,7 +200,8 @@ class BinConveyorTask(BinTask):
             vy = float(track.velocity[1])
             if vy > -1e-3:
                 continue
-            for arm in sorted((a for a in ("left", "right") if counts[a] < BELT_PICKS[a]), key=lambda a: (counts[a], a != "left")):
+            arms = [a for a in ("left", "right") if counts[a] < BELT_PICKS[a] and a not in (tried or {}).get(track.track_id, ())]
+            for arm in sorted(arms, key=lambda a: (counts[a], a != "left")):
                 dt = (INTERCEPT_Y[arm] - float(track.position[1])) / vy
                 if dt >= approach:
                     jobs.append((now + dt - approach, track, arm, now + dt))
