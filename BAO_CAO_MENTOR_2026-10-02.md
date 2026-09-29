@@ -30,17 +30,26 @@ D435 (sim, RGB-D)  ->  detector + tracker  ->  FoundationPose 6D (WSL2, GTX 1650
 |---|---|---|
 | 28/09 | 5/6 | 302 s |
 | 29/09, gắp liên tiếp không về tư thế nghỉ, pose gt | **6/6** | **199 s** |
-| với FoundationPose | *(đang chạy)* | |
-| với mink | *(đang chạy)* | |
+| với mink (tay không đi tới vật bằng QP), pose gt | **6/6** | **196 s** |
 
 **Policy học được vs waypoint viết tay** — 50 vị trí/góc/vật ngẫu nhiên, seed cố định khác seed lúc sinh demo; thành công = vật được nhấc ≥ 3 cm cùng tay:
 
 | Phương pháp | Thành công | Thời gian nắm (s) |
 |---|---|---|
-| Waypoint viết tay | *(đang chạy)* | |
-| LeRobot ACT | *(đang train trên Kaggle)* | |
+| Waypoint viết tay | **31/50 (62%)** | 8.3 |
+| LeRobot ACT (v6) | **16/50 (32%)** | 14.1 |
 
-Dữ liệu: *(N)* demo tự sinh bằng pipeline viết tay (~75% episode đạt), 10 Hz, state-only (38 chiều quan sát → 15 chiều hành động: pose cổ tay đích + 6 lệnh ngón). ACT 40M tham số, 40k bước, GPU T4 (Kaggle).
+| Vật | Viết tay | ACT |
+|---|---|---|
+| Lon đứng | 12/12 | 0/12 |
+| Lon nằm | 3/14 | 3/14 |
+| Táo | 6/9 | 3/9 |
+| Cam | 7/9 | 4/9 |
+| Đào | 3/6 | **6/6** |
+
+ACT còn 7 lần nhấc được 2.5–3 cm (ngay dưới ngưỡng): policy nhấc chậm hơn demo nhiều; lon đứng hỏng hoàn toàn -- chưa rõ nguyên nhân, cần xem lại.
+
+Dữ liệu: 326 demo tự sinh bằng pipeline viết tay (~75% episode đạt), 10 Hz, state-only (38 chiều quan sát → 15 chiều hành động: pose cổ tay đích + 6 lệnh ngón). ACT 40M tham số, 40k bước, GPU T4 (Kaggle).
 
 ## 3. Vì sao chọn cách này
 - **Không vứt IK:** mọi phương pháp hiện đại vẫn dùng IK bên trong. Cái đổi là cách ra lệnh: từ chuỗi waypoint cố định + hằng số chỉnh tay theo từng vật sang (a) tối ưu hoá có ràng buộc mỗi chu kỳ (mink) và (b) policy vòng kín học từ dữ liệu.

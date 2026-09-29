@@ -26,7 +26,7 @@ from simulation.policy.features import FINGER_ORDER, apply_action, observation
 from simulation.policy.model import ChunkPolicy, EnsembledController
 
 CONTROL_PERIOD_S = 0.1
-MAX_SECONDS = 14.0
+MAX_SECONDS = float(__import__('os').environ.get('POLICY_MAX_SECONDS', '25'))
 PROOF_RISE_M = 0.03
 TRACK_TOLERANCE_M = 0.001
 DEFAULT_POLICY = Path("artifacts") / "policy" / "grasp_policy.pt"

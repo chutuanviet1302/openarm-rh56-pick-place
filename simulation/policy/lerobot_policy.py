@@ -17,7 +17,9 @@ from pathlib import Path
 import numpy as np
 
 ROBOT_DIM = 27
-ACT_ENSEMBLE_COEFF = 0.01
+import os
+# ACT temporal ensembling coefficient; "none" executes each predicted chunk as is.
+ACT_ENSEMBLE_COEFF = os.environ.get("ACT_ENSEMBLE", "0.01")
 
 
 class LeRobotController:
@@ -30,8 +32,8 @@ class LeRobotController:
         path = str(path)
         config = PreTrainedConfig.from_pretrained(path)
         config.device = device
-        if config.type == "act":
-            config.temporal_ensemble_coeff = ACT_ENSEMBLE_COEFF
+        if config.type == "act" and ACT_ENSEMBLE_COEFF != "none":
+            config.temporal_ensemble_coeff = float(ACT_ENSEMBLE_COEFF)
             config.n_action_steps = 1
         self.policy = get_policy_class(config.type).from_pretrained(path, config=config)
         self.policy.eval()
