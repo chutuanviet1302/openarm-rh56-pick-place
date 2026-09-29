@@ -8,10 +8,13 @@ observation (38):
     object (11)  estimated object position in the wrist frame 3,
                  object symmetry axis in the wrist frame 3 (0 for round fruit),
                  kind one-hot 5 (can upright, can lying, apple, orange, peach)
-action per step (15):
-    commanded wrist position relative to the measured wrist, in the wrist frame 3,
-    commanded wrist rotation relative to the measured one 6 (rot6d),
-    hand actuator commands 6
+action per step (15): the next command, relative to the current COMMAND
+    wrist position change, in the commanded wrist frame 3,
+    wrist rotation change 6 (rot6d),
+    hand actuator commands 6 (absolute)
+The first version took the command relative to the MEASURED wrist: that is the servo
+lag (~3.5 mm), not the motion (~7.8 mm per 0.1 s), and in closed loop the arm crept
+toward the object at a third of the demonstrated speed and never reached it.
 """
 
 from __future__ import annotations
@@ -54,14 +57,16 @@ def observation(arm_q, hand_q, forces, wrist: np.ndarray, object_est: np.ndarray
                            rel, axis, kind_onehot(kind, pose)]).astype(np.float32)
 
 
-def action(wrist: np.ndarray, wrist_cmd: np.ndarray, hand_ctrl) -> np.ndarray:
-    r = wrist[:3, :3]
-    return np.concatenate([r.T @ (wrist_cmd[:3, 3] - wrist[:3, 3]), rot6d(r.T @ wrist_cmd[:3, :3]),
-                           hand_ctrl]).astype(np.float32)
+def action(cmd_now: np.ndarray, cmd_next: np.ndarray, hand_ctrl_next) -> np.ndarray:
+    """The step from the current commanded wrist pose to the next one (4x4 world)."""
+    r = cmd_now[:3, :3]
+    return np.concatenate([r.T @ (cmd_next[:3, 3] - cmd_now[:3, 3]), rot6d(r.T @ cmd_next[:3, :3]),
+                           hand_ctrl_next]).astype(np.float32)
 
 
 def apply_action(wrist: np.ndarray, act: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(target wrist 4x4 world, hand commands) from an action and the measured wrist."""
+    """(target wrist 4x4 world, hand commands) from an action and the current COMMANDED
+    wrist pose (forward kinematics of the arm command, not the measured wrist)."""
     r = wrist[:3, :3]
     target = np.eye(4)
     target[:3, 3] = wrist[:3, 3] + r @ act[:3]
@@ -74,5 +79,7 @@ def episode_arrays(demo) -> tuple[np.ndarray, np.ndarray]:
     kind, pose = str(demo["kind"]), str(demo["pose"])
     obs = np.stack([observation(demo["arm_q"][t], demo["hand_q"][t], demo["forces"][t], demo["wrist"][t],
                                 demo["object_est"][t], kind, pose) for t in range(len(demo["time"]))])
-    act = np.stack([action(demo["wrist"][t], demo["wrist_cmd"][t], demo["hand_ctrl"][t]) for t in range(len(demo["time"]))])
+    cmd, hand = demo["wrist_cmd"], demo["hand_ctrl"]
+    nxt = [min(t + 1, len(cmd) - 1) for t in range(len(cmd))]
+    act = np.stack([action(cmd[t], cmd[nxt[t]], hand[nxt[t]]) for t in range(len(cmd))])
     return obs, act

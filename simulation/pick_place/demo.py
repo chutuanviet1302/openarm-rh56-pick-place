@@ -97,8 +97,8 @@ class Demo:
         # start_over_basket starts the next episode from that pose.
         self.stay_over_basket = stay_over_basket
         self.start_over_basket = start_over_basket
-        # "mink": the free moves of a drop task (to the hover, over to the box, home)
-        # are solved by mink's QP with table/box/object clearance as constraints
+        # "mink": the empty-hand move of a drop task to the next object's hover is
+        # solved by mink's QP with table/box/object clearance as constraints
         # (mink_motion.py); "waypoints": the planner's joint blends, as before.
         if motion not in ("waypoints", "mink"):
             raise ValueError("motion must be 'waypoints' or 'mink'")
@@ -558,10 +558,11 @@ class Demo:
         self.log.record("carry_clearance_above_rim_m", clearance)
         self.log.note(f"object bottom is {clearance*100:+.1f}cm above the basket rim; transferring A -> B")
         path = plan.paths["transfer"]
-        if self.motion == "mink":
-            self._mink_move(path[-1], C.TRANSFER_SECONDS, avoid_object=False)
-        else:
-            ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
+        # Carrying stays on the planner's Cartesian transfer path, also with
+        # motion="mink": mink re-solved each segment on its own and the loaded arm
+        # jerked between them -- a left-hand apple held by thumb and pinky fell out
+        # on the way (full mink run, 2026-09-29). mink moves the empty hand only.
+        ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
         try:
             self._check_carry_clearance("transfer")
         except RuntimeError as error:
@@ -829,12 +830,9 @@ class Demo:
     def return_home(self) -> None:
         ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
         arm, hand = f"{side}_arm", f"{side}_hand"
-        if self.motion == "mink":
-            ex.move_to({hand: scene.rest_hand[side]}, 0.5)
-            self._mink_move(scene.attention_pose[side], 2.0 * C.RETURN_SECONDS, avoid_object=False)
-            ex.move_to({arm: scene.attention_pose[side]}, 0.5)  # exact joints (the IK redundancy)
-            ex.hold(C.DROP_FINAL_SETTLE)
-            return
+        # Home keeps the planned hover -> raise -> attention route, also with
+        # motion="mink": mink's straight line from over the box down to the hanging
+        # hand ran a finger 3 mm into the box wall (full mink run, 2026-09-29).
         # Continue home after clearing the basket.
         ex.move_to({arm: plan["hover"], hand: scene.rest_hand[side]}, C.RETURN_SECONDS)
         # Back the way it came, via a raise point re-chosen now that the object stands

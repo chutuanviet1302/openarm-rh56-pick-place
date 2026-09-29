@@ -20,6 +20,7 @@ import numpy as np
 
 from simulation.pick_place import config as C
 from simulation.pick_place.demo import Demo
+from simulation.pick_place.kinematics import wrist_frame
 from simulation.pick_place.mink_motion import MinkArm
 from simulation.policy.features import FINGER_ORDER, apply_action, observation
 from simulation.policy.model import ChunkPolicy, EnsembledController
@@ -71,7 +72,11 @@ class PolicyGraspDemo(Demo):
             forces = scene.finger_contact_forces(side)
             obs = observation(data.qpos[scene.arm_qpos[side]], data.qpos[scene.hand_qpos[side]],
                               [forces.get(f, 0.0) for f in FINGER_ORDER], wrist, self.perceived_pose, kind, rest)
-            target, hand = apply_action(wrist, controller(obs))
+            # The action steps the COMMANDED wrist pose (features.action).
+            cmd_p, cmd_r = wrist_frame(self.model, side, data.ctrl[scene.arm_actuators[side]])
+            command = np.eye(4)
+            command[:3, :3], command[:3, 3] = cmd_r, cmd_p
+            target, hand = apply_action(command, controller(obs))
             arm_q = mink_arm.converge(target, iterations=30)
             data.ctrl[scene.hand_actuators[side]] = hand
             if light_grip is None and sum(f > 0.5 for f in forces.values()) >= 3:
