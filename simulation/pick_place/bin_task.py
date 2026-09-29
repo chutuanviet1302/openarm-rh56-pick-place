@@ -140,8 +140,9 @@ class BinTask:
     box, box_half, box_wall, known, drop_spots = BOX, BOX_HALF, BOX_WALL, KNOWN, DROP_SPOTS
     keep_over_last = False      # leave the last arm over the box for the next phase
 
-    def __init__(self, layout=LAYOUT, *, pose_backend: str = "gt") -> None:
+    def __init__(self, layout=LAYOUT, *, pose_backend: str = "gt", motion: str = "waypoints") -> None:
         self.arm_over: dict[str, Demo] = {}
+        self.motion = motion
         self.layout = list(layout)
         self.scene = self.build_scene()
         self.pose_backend = pose_backend
@@ -242,7 +243,7 @@ class BinTask:
                 scene.set_target(name)
                 demo = Demo(scene=scene, side=arm, pose_backend=self.pose_backend, release="drop",
                             place_offset=spot, detection_mask=detection.mask, mask_source=self.mask_source(name),
-                            stay_over_basket=True, start_over_basket=over is not None)
+                            stay_over_basket=True, start_over_basket=over is not None, motion=self.motion)
                 trial = run_trial(demo, self.recorder)
                 self._settle(SETTLE_AFTER_DROP_S)
                 ok = scene.object_in_basket(name)
@@ -399,6 +400,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--pose-backend", default="foundationpose", choices=("gt", "foundationpose"))
     parser.add_argument("--frames", type=Path, default=Path("artifacts") / "bin_task_frames.npz")
     parser.add_argument("--report", type=Path, default=Path("artifacts") / "bin_task.json")
+    parser.add_argument("--motion", default="waypoints", choices=("waypoints", "mink"))
     parser.add_argument("--no-view", action="store_true", help="simulate and save only")
     parser.add_argument("--replay", type=Path, help="play a saved recording and exit")
     parser.add_argument("--speed", type=float, default=1.0, help="playback speed factor")
@@ -406,7 +408,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.replay:
         replay(args.replay, args.speed)
         return
-    task = BinTask(pose_backend=args.pose_backend)
+    task = BinTask(pose_backend=args.pose_backend, motion=args.motion)
     try:
         result = task.run()
     finally:

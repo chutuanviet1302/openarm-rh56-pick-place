@@ -45,6 +45,7 @@ class Demo:
         mask_source=None,
         stay_over_basket: bool = False,
         start_over_basket: bool = False,
+        motion: str = "waypoints",
     ) -> None:
         """`pose_backend` ('gt', 'color', 'foundationpose'; pose_source.py): perceive
         the object's full 6D pose and take it as the grasp library says for that pose.
@@ -96,6 +97,12 @@ class Demo:
         # start_over_basket starts the next episode from that pose.
         self.stay_over_basket = stay_over_basket
         self.start_over_basket = start_over_basket
+        # "mink": the free moves of a drop task (to the hover, over to the box, home)
+        # are solved by mink's QP with table/box/object clearance as constraints
+        # (mink_motion.py); "waypoints": the planner's joint blends, as before.
+        if motion not in ("waypoints", "mink"):
+            raise ValueError("motion must be 'waypoints' or 'mink'")
+        self.motion = motion if release == "drop" else "waypoints"
         self.plan: Plan | None = None
         self.light_grip_ctrl: np.ndarray | None = None
         self.failed_grasp_yaws: list[float] = []
@@ -377,6 +384,16 @@ class Demo:
     def phase_ready(self) -> None:
         ex, plan = self.executor, self.plan
         arm = f"{self.side}_arm"
+        if self.motion == "mink":
+            if not self.start_over_basket:
+                ex.hold(C.DROP_SETTLE_AT_START)
+            self._mink_move(plan["hover"], C.MOVE_TO_RAISE + C.MOVE_TO_HOVER, avoid_object=True)
+            # Same wrist pose, the plan's own elbow: the 7-DOF arm reaches the hover with
+            # a family of elbow positions, and the planned ready/pregrasp blends were
+            # collision-checked from this one (from mink's, the fist swept the peach).
+            ex.move_to({arm: plan["hover"]}, 0.6)
+            ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
+            return
         if self.start_over_basket and self._direct_to_hover():
             ex.move_to({arm: plan["hover"]}, C.MOVE_TO_HOVER)
             ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
@@ -541,7 +558,10 @@ class Demo:
         self.log.record("carry_clearance_above_rim_m", clearance)
         self.log.note(f"object bottom is {clearance*100:+.1f}cm above the basket rim; transferring A -> B")
         path = plan.paths["transfer"]
-        ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
+        if self.motion == "mink":
+            self._mink_move(path[-1], C.TRANSFER_SECONDS, avoid_object=False)
+        else:
+            ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
         try:
             self._check_carry_clearance("transfer")
         except RuntimeError as error:
@@ -790,9 +810,31 @@ class Demo:
             return
         self.return_home()
 
+    def _mink_move(self, joints: np.ndarray, seconds: float, avoid_object: bool) -> None:
+        """Cartesian move to the wrist pose of `joints` (a plan way point), solved by mink
+        with the hand and forearm kept clear of the table, the box and the other objects
+        (and of the target object on the way to it)."""
+        from simulation.pick_place.kinematics import wrist_frame
+        from simulation.pick_place.mink_motion import MinkArm
+
+        scene = self.scene
+        avoid = set(scene.table_geoms) | set(scene.basket_geoms) | set(scene.other_object_geoms())
+        if avoid_object:
+            avoid.add(scene.object_geom)
+        position, rotation = wrist_frame(self.model, self.side, joints)
+        target = np.eye(4)
+        target[:3, :3], target[:3, 3] = rotation, position
+        MinkArm(scene, self.side, avoid=avoid).move_to_pose(self.executor, target, seconds)
+
     def return_home(self) -> None:
         ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
         arm, hand = f"{side}_arm", f"{side}_hand"
+        if self.motion == "mink":
+            ex.move_to({hand: scene.rest_hand[side]}, 0.5)
+            self._mink_move(scene.attention_pose[side], 2.0 * C.RETURN_SECONDS, avoid_object=False)
+            ex.move_to({arm: scene.attention_pose[side]}, 0.5)  # exact joints (the IK redundancy)
+            ex.hold(C.DROP_FINAL_SETTLE)
+            return
         # Continue home after clearing the basket.
         ex.move_to({arm: plan["hover"], hand: scene.rest_hand[side]}, C.RETURN_SECONDS)
         # Back the way it came, via a raise point re-chosen now that the object stands

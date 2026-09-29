@@ -89,8 +89,8 @@ class BinConveyorTask(BinTask):
     box, box_half, box_wall, known, drop_spots = BOX, BOX_HALF, BOX_WALL, KNOWN, DROP_SPOTS
     keep_over_last = False      # the left arm is done after the table: it goes home at once
 
-    def __init__(self, *, pose_backend: str = "foundationpose") -> None:
-        super().__init__(TABLE_OBJECTS, pose_backend=pose_backend)
+    def __init__(self, *, pose_backend: str = "foundationpose", motion: str = "waypoints") -> None:
+        super().__init__(TABLE_OBJECTS, pose_backend=pose_backend, motion=motion)
         belt_x = (BELT.x - 0.5 * BELT.width, BELT.x + 0.5 * BELT.width)
         # The table look stops short of the belt: its top stands 1 cm over the
         # platform, which the table detector would take for a long object.
@@ -161,7 +161,7 @@ class BinConveyorTask(BinTask):
                 place_offset=BELT_DROP_SPOTS[arm][min(counts[arm], len(BELT_DROP_SPOTS[arm]) - 1)],
                 # Home after a belt pick: an arm parked over the box hides the belt
                 # from the head camera and the next object is never tracked.
-                stay_over_basket=False, start_over_basket=arm in self.arm_over,
+                stay_over_basket=False, start_over_basket=arm in self.arm_over, motion=self.motion,
             )
             self.arm_over.pop(arm, None)
             trial = run_trial(demo, self.recorder)
@@ -238,6 +238,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--pose-backend", default="foundationpose", choices=("gt", "foundationpose"))
     parser.add_argument("--frames", type=Path, default=Path("artifacts") / "bin_conveyor_frames.npz")
     parser.add_argument("--report", type=Path, default=Path("artifacts") / "bin_conveyor.json")
+    parser.add_argument("--motion", default="waypoints", choices=("waypoints", "mink"))
     parser.add_argument("--no-view", action="store_true")
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--speed", type=float, default=1.0)
@@ -245,7 +246,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.replay:
         replay(args.replay, args.speed, scene_builder=build_scene)
         return
-    task = BinConveyorTask(pose_backend=args.pose_backend)
+    task = BinConveyorTask(pose_backend=args.pose_backend, motion=args.motion)
     try:
         result = task.run()
     finally:
