@@ -58,9 +58,10 @@ class PerceptionLoopTest(unittest.TestCase):
             self.assertEqual(len(first.held), 1)
             held, box = first.held[0]
             np.testing.assert_allclose(box, can.box, atol=0.01)   # where the camera saw it
-            rows = [r for r in perception.log.rows if r[0] == len(perception.log.times) - 1]
-            self.assertEqual([r[2] for r in rows].count("can"), 1)  # the held box only, no duplicate
-            self.assertEqual([r[1] for r in rows if r[2] == "can"], ["held"])
+            last = len(perception.log.times) - 1
+            rows = [r for r, i in zip(perception.log.rows, perception.log.look_index) if i == last]
+            self.assertEqual([r.label for r in rows].count("can"), 1)  # the held box only, no duplicate
+            self.assertEqual([r.region for r in rows if r.label == "can"], ["held"])
             # The hand moves (the arm's joints): the box moves with it.
             arm = scene.arm_qpos["right"]
             saved = scene.data.qpos[arm].copy()
@@ -79,6 +80,28 @@ class PerceptionLoopTest(unittest.TestCase):
         finally:
             perception.phase_source = lambda: self.task.recorder.phase
             perception.set_target("right", None)
+
+    def test_six_d_poses_for_every_table_object(self):
+        from simulation.objects import geometric_center, quat_to_matrix
+
+        perception, scene = self.task.perception, self.task.scene
+        look = perception.look()
+        perception.estimate_6d("table", look.detections["table"])
+        perception.latest = None
+        look = perception.look()
+        shown = [r for r, i in zip(perception.log.rows, perception.log.look_index) if i == len(perception.log.times) - 1]
+        six_d = [r for r in shown if r.frame is not None]
+        self.assertEqual(len(six_d), len(TABLE_OBJECTS))
+        for row in six_d:
+            name = min((n for n, k in scene.object_types.items() if k == row.label),
+                       key=lambda n: float(np.linalg.norm(scene.object_position_of(n)[:2] - row.centroid[:2])))
+            pose = scene.object_pose(name)
+            centre = pose[:3, 3] + pose[:3, :3] @ geometric_center(row.label)
+            # gt backend: the model box sits on the object, axes = the object's axes.
+            self.assertLess(float(np.linalg.norm(row.frame[:3, 3] - centre)), 0.01, row.label)
+            np.testing.assert_allclose(row.frame[:3, :3], pose[:3, :3], atol=1e-9)
+        arrays = perception.log.arrays()
+        self.assertTrue(np.isfinite(arrays["det_frame"][-len(shown):]).any())
 
     def test_log_round_trips_into_the_replay_overlay(self):
         arrays = self.task.perception.log.arrays()

@@ -44,6 +44,9 @@ BOX_HALF_Y = 0.20
 TABLE_KINDS = (("can", "upright"), ("can", "lying"), ("peach", "upright"), ("orange", "upright"), ("apple", "upright"))
 BELT_KINDS = (("can", "upright"), ("orange", "upright"), ("apple", "upright"), ("peach", "upright"))
 DROP_GRID_STEP = 0.01
+# Floor counts as free under a drop spot when nothing there stands higher above the box
+# floor than the detector's own "above the surface" threshold (object_detector).
+from simulation.object_detector import ABOVE_SURFACE_M as FREE_FLOOR_M  # noqa: E402
 # Half the hand's narrowest extent per hand (m), measured on the model by
 # hand_half_width() in each palm's own frame (tests/test_layout_sampler.py checks the
 # numbers still match the model). The room the fingers need beside an object: kept
@@ -152,7 +155,7 @@ def object_height(placement: Placement) -> float:
 
 
 def drop_spot_candidates(box_half, side: str, radius: float, dropped: list[tuple[float, ...]],
-                         height: float | None = None) -> list[tuple[float, float]]:
+                         height: float | None = None, fill=None) -> list[tuple[float, float]]:
     """Drop offsets from the box centre for one object of footprint radius `radius`
     and height `height`: a DROP_GRID_STEP grid over the box's inside, on this arm's half
     (its own side of y = 0: the arms never reach across each other).
@@ -169,7 +172,15 @@ def drop_spot_candidates(box_half, side: str, radius: float, dropped: list[tuple
 
     (Nearest the box centre first made the planner pick a heading for the lying can
     whose grip slipped 49 mm on the proof lift, 2026-10-01; the centre of the arm's
-    half is where the plan-checked drops of the 6/6 runs were.)"""
+    half is where the plan-checked drops of the 6/6 runs were.)
+
+    `fill(x, y, r)`: the height of whatever lies in the box under that circle, from the
+    camera (Perception.tote_fill; inf where it cannot see). With it the whole box is a
+    candidate -- the arms take turns, the planner rejects what is out of reach -- and
+    the order is: free floor first (fill within FREE_FLOOR_M), nearest the centre of
+    this arm's half; then the lowest fill. The dropped spots are not used then: objects
+    roll after a drop, and dropping by the spots alone landed a can on a pile in the
+    middle and it rolled over the wall (2026-10-01)."""
     sign = -1.0 if side == "right" else 1.0
     margin = radius if height is None else max(radius, height - radius)
     half_x = max(0.0, box_half[0] - margin)
@@ -177,8 +188,16 @@ def drop_spot_candidates(box_half, side: str, radius: float, dropped: list[tuple
     xs = np.unique(np.round(np.concatenate([-steps, steps]), 6))  # symmetric: the centre line is a candidate
     reach_y = max(0.0, box_half[1] - margin)
     ys = np.arange(0.0, reach_y + 1e-9, DROP_GRID_STEP) * sign
+    if fill is not None:
+        ys = np.unique(np.round(np.concatenate([ys, -ys]), 6))
     spots = [(float(x), float(y)) for x in xs for y in ys]
     home = (0.0, sign * 0.5 * box_half[1])
+    if fill is not None:
+        def by_fill(spot):
+            level = float(fill(spot[0], spot[1], radius))
+            free = level <= FREE_FLOOR_M
+            return (not free, 0.0 if free else round(level, 3), round(float(np.hypot(spot[0] - home[0], spot[1] - home[1])), 4))
+        return sorted(spots, key=by_fill)
 
     def key(spot):
         gaps = [float(np.hypot(spot[0] - d[0], spot[1] - d[1])) - (d[2] if len(d) > 2 else radius) for d in dropped]

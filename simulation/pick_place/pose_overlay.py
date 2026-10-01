@@ -143,11 +143,12 @@ class PoseReplayOverlay:
     """Replay overlay: the latest 6D estimate (for `show_seconds`) as a 3-D box + axes,
     and its annotated head-camera image in the viewer's bottom-left corner."""
 
-    def __init__(self, recording, show_seconds: float) -> None:
+    def __init__(self, recording, show_seconds: float, markers: bool = True) -> None:
         self.times = recording["pose_times"] if "pose_times" in recording.files else np.zeros(0)
         if len(self.times):
             self.mats, self.boxes, self.images = recording["pose_mats"], recording["pose_boxes"], recording["pose_images"]
         self.show_seconds = show_seconds
+        self.draw_markers = markers
         self.shown = -1
 
     def current(self, t: float) -> int:
@@ -158,7 +159,7 @@ class PoseReplayOverlay:
 
     def markers(self, scn: mujoco.MjvScene, t: float) -> None:
         index = self.current(t)
-        if index >= 0:
+        if index >= 0 and self.draw_markers:
             add_pose_markers(scn, self.mats[index], self.boxes[index])
 
     def image(self, t: float):
