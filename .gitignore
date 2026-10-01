@@ -47,3 +47,6 @@ artifacts/lerobot/
 artifacts/lerobot_runs/
 artifacts/policy/
 artifacts/pose_overlays/
+
+# PickCell run directories (product.cell)
+runs/

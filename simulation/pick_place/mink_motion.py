@@ -96,7 +96,7 @@ class MinkArm:
     def move_to_pose(self, executor, target: np.ndarray, seconds: float, segments: int = 10) -> None:
         """Cartesian straight line (position lerp, rotation slerp) from the commanded wrist
         pose to `target`, each segment end solved by the QP from the previous one; the
-        executor follows the joint path (speed cap, contact checks)."""
+        executor follows the joint path in one smooth motion (speed cap, contact checks)."""
         from simulation.pick_place.kinematics import wrist_frame
 
         scene, side = self.scene, self.side
@@ -112,4 +112,4 @@ class MinkArm:
             waypoint[:3, 3] = start_p + f * (np.asarray(target[:3, 3]) - start_p)
             q = self.converge(waypoint, arm_q=q, iterations=60)
             path.append(q)
-        executor.follow({f"{side}_arm": path}, [seconds / segments] * segments)
+        executor.follow_path({f"{side}_arm": path}, seconds)

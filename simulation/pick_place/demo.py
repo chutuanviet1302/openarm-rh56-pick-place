@@ -46,6 +46,7 @@ class Demo:
         stay_over_basket: bool = False,
         start_over_basket: bool = False,
         motion: str = "waypoints",
+        place_candidates: list[tuple[float, float]] | None = None,
     ) -> None:
         """`pose_backend` ('gt', 'color', 'foundationpose'; pose_source.py): perceive
         the object's full 6D pose and take it as the grasp library says for that pose.
@@ -66,6 +67,9 @@ class Demo:
         # where the task puts it; this only moves where inside it the can is set down
         # (retrieve.py: toward the side the other arm can grasp from).
         self.place_offset = None if place_offset is None else np.array([*place_offset, 0.0], dtype=float)
+        # Drop spots to try in order (best first) when `place_offset` is not given: the
+        # first one the planner can reach is used (layout.drop_spot_candidates).
+        self.place_candidates = [np.array([*c, 0.0], dtype=float) for c in (place_candidates or [])]
         self.log = EpisodeLog(lambda: self.scene.data.time, verbose=verbose)
         # With perception on, the object's position comes from the camera (RGB-D ->
         # deprojection), never from the simulator state; the error against ground truth
@@ -322,7 +326,7 @@ class Demo:
             self.resolve_lift_from_here()
             ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
             return
-        ex.follow({arm: path}, [C.MOVE_TO_LIFT / len(path)] * len(path))
+        ex.follow_path({arm: path}, C.MOVE_TO_LIFT)
         plan.joints["lift"] = path[-1]
         plan.centers["lift"] = target
 
@@ -338,12 +342,47 @@ class Demo:
         return None if self.place_offset is None else self.scene.basket_floor() + self.place_offset
 
     def phase_plan(self) -> None:
+        if self.place_candidates:
+            # Grasp quality before drop preference: a square-on grasp at any drop spot
+            # before an off-square one at the first (an off-square lying-can grip,
+            # planned for the preferred spot, slipped 49 mm on the proof lift twice,
+            # 2026-10-01). Then every offset the library allows. Re-run on a grasp
+            # retry too: the spot is chosen again with the failed heading excluded.
+            failures = []
+            planned = False
+            for limit in (0.0, None):
+                self.planner.max_jaw_offset_deg = limit
+                for spot in self.place_candidates:
+                    self.place_offset = spot
+                    try:
+                        self._plan_once()
+                    except RuntimeError as error:
+                        square = " square-on" if limit == 0.0 else ""
+                        failures.append(f"spot {np.round(spot[:2], 3).tolist()}{square}: {str(error).splitlines()[0]}")
+                        continue
+                    planned = True
+                    break
+                if planned:
+                    break
+            self.planner.max_jaw_offset_deg = None
+            if not planned:
+                self.place_offset = None
+                raise RuntimeError("no drop spot plans:\n  " + "\n  ".join(failures))
+            if failures:
+                self.log.note(f"drop spot {np.round(self.place_offset[:2], 3).tolist()} after {len(failures)} unplannable tries")
+        else:
+            self._plan_once()
+        self._log_plan()
+
+    def _plan_once(self) -> None:
         if self.pose_backend is not None and len(self.grasp_options) > 1:
             self._plan_library_grasps()
         else:
             self.plan = self.executor.think(
                 self.planner.plan, self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws), place_floor=self.place_floor()
             )
+
+    def _log_plan(self) -> None:
         self.log.record("grasp_yaw_deg", float(self.plan.grasp_yaw_deg))
         self.log.record("place_yaw_deg", float(self.plan.place_yaw_deg))
         self.log.record("route_strategy", self.plan.route_strategy)
@@ -394,16 +433,58 @@ class Demo:
             ex.move_to({arm: plan["hover"]}, 0.6)
             ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
             return
+        obstacles = self._approach_obstacles()
         if self.start_over_basket and self._direct_to_hover():
-            ex.move_to({arm: plan["hover"]}, C.MOVE_TO_HOVER)
-            ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
+            self._through([plan["hover"], plan["ready"]], [C.MOVE_TO_HOVER, C.MOVE_TO_READY], obstacles)
             return
         if self.start_over_basket:
             self.return_home_from_here()
         ex.hold(C.DROP_SETTLE_AT_START if self.release == "drop" else C.SETTLE_AT_START)
-        ex.move_to({arm: plan["raise"]}, C.MOVE_TO_RAISE)
-        ex.move_to({arm: plan["hover"]}, C.MOVE_TO_HOVER)
-        ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
+        self._through([plan["raise"], plan["hover"], plan["ready"]],
+                      [C.MOVE_TO_RAISE, C.MOVE_TO_HOVER, C.MOVE_TO_READY], obstacles)
+
+    def _approach_obstacles(self) -> set[int]:
+        scene = self.scene
+        return scene.basket_geoms | {scene.object_geom} | scene.table_geoms | scene.other_object_geoms()
+
+    def _through(self, waypoints: list[np.ndarray], seconds: list[float], obstacles: set[int],
+                 hand: np.ndarray | None = None) -> None:
+        """Plan way points in one continuous motion (Executor.follow_path) if the
+        spline through them keeps the fist PATH_CLEARANCE from `obstacles` and no
+        closer to a joint limit than the way points themselves (or
+        MIN_JOINT_MARGIN_DEG); otherwise one stop per way point, as planned -- the
+        straight joint blends between them are what the planner checked. `hand`: the
+        hand's target, reached over the whole motion."""
+        from simulation.pick_place.kinematics import path_spline
+
+        ex, scene, side = self.executor, self.scene, self.side
+        arm, hand_group = f"{side}_arm", f"{side}_hand"
+        start = self.data.ctrl[scene.arm_actuators[side]].copy()
+        curve, _ = path_spline([start, *waypoints])
+        floor = min(C.MIN_JOINT_MARGIN_DEG, *(self.planner.joint_margin_degrees(q) for q in [start, *waypoints]))
+        samples = 40 * len(waypoints)  # blend_contacts' density per segment
+        blocked = None
+        for s in np.linspace(0.0, 1.0, samples + 1)[1:]:
+            q = curve(float(s))
+            if self.planner.joint_margin_degrees(q) < floor - 1e-6:
+                blocked = f"joint margin under {floor:.1f} deg"
+                break
+            hits = self.planner.hand_contacts(q, obstacles, closed=True, clearance=C.PATH_CLEARANCE)
+            if hits:
+                blocked = ", ".join(sorted(hits))
+                break
+        if blocked is None:
+            groups = {arm: list(waypoints)}
+            if hand is not None:
+                groups[hand_group] = [hand]
+            ex.follow_path(groups, float(sum(seconds)))
+            return
+        self.log.note(f"one-motion path blocked ({blocked}); stopping at each way point")
+        for index, (q, duration) in enumerate(zip(waypoints, seconds)):
+            targets = {arm: q}
+            if hand is not None and index == 0:
+                targets[hand_group] = hand
+            ex.move_to(targets, duration)
 
     def _direct_to_hover(self) -> bool:
         """Is the joint blend from where the arm stands (over the basket) to this plan's
@@ -562,7 +643,7 @@ class Demo:
         # motion="mink": mink re-solved each segment on its own and the loaded arm
         # jerked between them -- a left-hand apple held by thumb and pinky fell out
         # on the way (full mink run, 2026-09-29). mink moves the empty hand only.
-        ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
+        ex.follow_path({arm: path}, C.TRANSFER_SECONDS)
         try:
             self._check_carry_clearance("transfer")
         except RuntimeError as error:
@@ -705,7 +786,7 @@ class Demo:
         path = [q for q in plan.paths["lower"]
                 if start_z - float(self.scene.wrist_position_at(side, q)[2]) <= allowed]
         if path:
-            ex.follow({f"{side}_arm": path}, [C.LOWER_SECONDS / len(plan.paths["lower"])] * len(path))
+            ex.follow_path({f"{side}_arm": path}, C.LOWER_SECONDS * len(path) / len(plan.paths["lower"]))
             plan.joints["lower"] = path[-1]
         drop = scene.object_bottom_z() - scene.basket_rim_z()
         self.log.record("drop_height_above_rim_m", drop)
@@ -828,15 +909,17 @@ class Demo:
         MinkArm(scene, self.side, avoid=avoid).move_to_pose(self.executor, target, seconds)
 
     def return_home(self) -> None:
+        if hasattr(self.executor.viewer, "phase"):
+            self.executor.viewer.phase = f"{self.side} home"
         ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
         arm, hand = f"{side}_arm", f"{side}_hand"
         # Home keeps the planned hover -> raise -> attention route, also with
         # motion="mink": mink's straight line from over the box down to the hanging
         # hand ran a finger 3 mm into the box wall (full mink run, 2026-09-29).
         # Continue home after clearing the basket.
-        ex.move_to({arm: plan["hover"], hand: scene.rest_hand[side]}, C.RETURN_SECONDS)
         # Back the way it came, via a raise point re-chosen now that the object stands
         # in the basket, so the hand never sweeps low over the basket or the object.
+        # (find_raise depends on the plan's hover only: chosen before moving.)
         try:
             raise_joints, _ = ex.think(self.planner.find_raise, plan["hover"], plan.centers["hover"])
         except RuntimeError:
@@ -849,9 +932,8 @@ class Demo:
                 raise
             self.log.note("no raise way point on the way back; the direct blend home is clear")
             raise_joints = None
-        if raise_joints is not None:
-            ex.move_to({arm: raise_joints}, C.RETURN_SECONDS)
-        ex.move_to({arm: scene.attention_pose[side]}, C.RETURN_SECONDS)
+        way = [plan["hover"]] + ([raise_joints] if raise_joints is not None else []) + [scene.attention_pose[side]]
+        self._through(way, [C.RETURN_SECONDS] * len(way), self._approach_obstacles(), hand=scene.rest_hand[side])
         ex.hold(C.DROP_FINAL_SETTLE if self.release == "drop" else C.FINAL_SETTLE)  # settle to verify the object stands on its own
 
     PHASE_MESSAGES = {
@@ -874,6 +956,8 @@ class Demo:
         while index < len(PHASES):
             name = PHASES[index]
             self.log.phase(index + 1, len(PHASES), name, self.PHASE_MESSAGES[name])
+            if hasattr(viewer, "phase"):
+                viewer.phase = f"{self.side} {name}"
             try:
                 getattr(self, f"phase_{name}")()
             except RuntimeError as error:
@@ -900,7 +984,20 @@ class Demo:
         arm, hand = f"{side}_arm", f"{side}_hand"
         if self.light_grip_ctrl is not None:
             ex.move_to({hand: self.light_grip_ctrl}, C.RELAX_GRIP_SECONDS)
-        ex.move_to({hand: scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS), arm: plan["hover"]}, C.RETREAT_SECONDS)
+        # Open in place, then straight up, then to the hover. Opening while the wrist
+        # moved to the hover rolled a lying can off the platform after a failed proof
+        # lift (x 0.255 -> -0.03 m in 2 s, demo_002 2026-10-01): it was lost to the retry.
+        ex.move_to({hand: scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS)}, C.RELEASE_SECONDS)
+        from simulation.pick_place.kinematics import solve_pose_ik, wrist_frame
+
+        here = self.data.ctrl[scene.arm_actuators[side]].copy()
+        position, rotation = wrist_frame(self.model, side, here)
+        try:
+            up = solve_pose_ik(self.model, side, position + np.array([0.0, 0.0, C.PROOF_LIFT_HEIGHT]), rotation, here)
+            ex.move_to({arm: up}, C.RETREAT_SECONDS)
+        except RuntimeError:
+            pass  # no straight-up pose: go to the hover directly, as before
+        ex.move_to({arm: plan["hover"]}, C.RETREAT_SECONDS)
         ex.open_fingers(side, ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
         ex.move_to({hand: scene.rest_hand[side]}, 0.5 * C.RELEASE_SECONDS)
         raise_joints, _ = ex.think(self.planner.find_raise, plan["hover"], plan.centers["hover"])

@@ -59,6 +59,13 @@ class Features:
 
 
 @dataclass
+class CameraFrame:
+    rgb: np.ndarray                   # (H, W, 3) uint8
+    depth: np.ndarray                 # (H, W) m along the optical axis
+    points: np.ndarray                # (H, W, 3) world, NaN where there is no depth
+
+
+@dataclass
 class Detection:
     label: str | None
     cost: float
@@ -105,6 +112,12 @@ class ObjectDetector:
     # ------------------------------------------------------------------ rendering
     def _render(self, data: mujoco.MjData, renderer: mujoco.Renderer) -> tuple[np.ndarray, np.ndarray]:
         # `renderer` must belong to the same model as `data`.
+        # No shadow or reflection passes: they are 78% of the frame time (673 -> 152 ms
+        # per 640x480 frame on the laptop's Intel Iris Xe, shadowsize 8192, 2026-10-01)
+        # and depth never needs them. Enrollment renders through here too, so the
+        # reference colours are taken under the same lighting as every look.
+        renderer.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0
+        renderer.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
         renderer.update_scene(data, camera=self.camera)
         rgb = renderer.render().copy()
         renderer.enable_depth_rendering()
@@ -125,10 +138,10 @@ class ObjectDetector:
         return cam @ T[:3, :3].T + T[:3, 3]
 
     # ------------------------------------------------------------------ detection
-    def candidates(self, data: mujoco.MjData, renderer: mujoco.Renderer | None = None,
-                   model: mujoco.MjModel | None = None) -> list[Detection]:
-        """Unlabelled object candidates in the current frame. `model` defaults to the
-        detector's own; pass the scene's when looking at another scene (enrollment)."""
+    def frame(self, data: mujoco.MjData, renderer: mujoco.Renderer | None = None,
+              model: mujoco.MjModel | None = None) -> "CameraFrame":
+        """One RGB-D frame of this detector's camera as world points; several detectors
+        on the same camera can share it (candidates(frame=...))."""
         model = model or self.model
         own = renderer is None
         renderer = renderer or mujoco.Renderer(model, HEIGHT, WIDTH)
@@ -137,7 +150,16 @@ class ObjectDetector:
         finally:
             if own:
                 renderer.close()
-        points = self._points(model, data, depth)
+        return CameraFrame(rgb, depth, self._points(model, data, depth))
+
+    def candidates(self, data: mujoco.MjData, renderer: mujoco.Renderer | None = None,
+                   model: mujoco.MjModel | None = None, frame: "CameraFrame | None" = None) -> list[Detection]:
+        """Unlabelled object candidates in the current frame. `model` defaults to the
+        detector's own; pass the scene's when looking at another scene (enrollment).
+        `frame`: an already rendered frame of the same camera (no render here)."""
+        if frame is None:
+            frame = self.frame(data, renderer, model)
+        rgb, depth, points = frame.rgb, frame.depth, frame.points
         x, y, z = points[..., 0], points[..., 1], points[..., 2]
         inside = (
             np.isfinite(z) & (x >= self.workspace_x[0]) & (x <= self.workspace_x[1])
@@ -209,14 +231,15 @@ class ObjectDetector:
         ]
         return float(np.sum(np.square(terms)))
 
-    def detect(self, data: mujoco.MjData, renderer: mujoco.Renderer | None = None, unique: bool = True) -> list[Detection]:
+    def detect(self, data: mujoco.MjData, renderer: mujoco.Renderer | None = None, unique: bool = True,
+               frame: "CameraFrame | None" = None) -> list[Detection]:
         """Detections with identities; candidates that match nothing well enough keep
         label None. `unique`: each enrolled object at most once (Hungarian); False
         when the table may hold several of the same object (each candidate takes its
         best match)."""
         if not self.references:
             raise RuntimeError("enroll() the known objects first")
-        found = self.candidates(data, renderer)
+        found = self.candidates(data, renderer, frame=frame)
         labels = list(self.references)
         if not found:
             return []
@@ -297,10 +320,11 @@ class ObjectTracker:
     track not seen for `max_missed` looks in a row is dropped (the object left the
     table -- in the basket, or knocked off)."""
 
-    def __init__(self, gate: float = 0.08, max_missed: int = 1) -> None:
+    def __init__(self, gate: float = 0.08, max_missed: int = 1, first_id: int = 1) -> None:
+        """`first_id`: where the ids start (two trackers on one camera keep apart)."""
         self.gate, self.max_missed = gate, max_missed
         self.tracks: dict[int, Track] = {}
-        self._next = 1
+        self._next = first_id
 
     def update(self, detections: list[Detection], t: float | None = None) -> list[Track]:
         """`t`: the look's time (s). With it, tracks gate on their predicted position

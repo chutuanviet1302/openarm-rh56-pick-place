@@ -35,8 +35,10 @@ import numpy as np
 from simulation.object_detector import ObjectDetector, ObjectTracker
 from simulation.objects import Placement
 from simulation.pick_place import config as C
+from simulation.pick_place.conveyor import LOOK_PERIOD_S
 from simulation.pick_place.demo import Demo, run_trial
-from simulation.pick_place.pose_overlay import PoseEventLog, add_pose_markers
+from simulation.pick_place.perception_loop import Perception
+from simulation.pick_place.pose_overlay import PoseEventLog
 from simulation.pick_place.scene import Scene
 
 PLATFORM = 0.10
@@ -88,7 +90,10 @@ class FrameRecorder:
         self.qpos: list[np.ndarray] = []
         self.captions: list[str] = []
         self.caption = ""
-        self.extra: dict[str, np.ndarray] = {}  # saved alongside (the 6D pose events)
+        self.phase = ""                    # "<arm> <demo phase>", set by Demo.run
+        self.phases: list[str] = []
+        self.extra: dict[str, np.ndarray] = {}  # saved alongside (the 6D pose events, detections)
+        self.hooks: list = []  # called with the sim time after each recorded frame (perception looks)
 
     def is_running(self) -> bool:
         return True
@@ -99,11 +104,14 @@ class FrameRecorder:
             self.times.append(t)
             self.qpos.append(self._data.qpos.copy())
             self.captions.append(self.caption)
+            self.phases.append(self.phase)
+            for hook in self.hooks:
+                hook(t)
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(path, times=np.asarray(self.times), qpos=np.asarray(self.qpos),
-                            captions=np.asarray(self.captions), **self.extra)
+                            captions=np.asarray(self.captions), phases=np.asarray(self.phases), **self.extra)
 
 
 @dataclass
@@ -140,8 +148,13 @@ class BinTask:
     box, box_half, box_wall, known, drop_spots = BOX, BOX_HALF, BOX_WALL, KNOWN, DROP_SPOTS
     keep_over_last = False      # leave the last arm over the box for the next phase
 
+    picks_per_arm = PICKS_PER_ARM
+
     def __init__(self, layout=LAYOUT, *, pose_backend: str = "gt", motion: str = "waypoints") -> None:
         self.arm_over: dict[str, Demo] = {}
+        # Where each arm let go so far (offsets from the box centre): the next drop
+        # spot is chosen away from them when no fixed spots are given.
+        self.dropped: dict[str, list[tuple[float, float]]] = {"right": [], "left": []}
         self.motion = motion
         self.layout = list(layout)
         self.scene = self.build_scene()
@@ -151,20 +164,33 @@ class BinTask:
         self.tracker = ObjectTracker()
         self.recorder = FrameRecorder(self.scene.data)
         self.pose_log = PoseEventLog(self.scene)
+        self.perception = self.build_perception()
+        self.recorder.hooks.append(self.perception.on_frame)
+
+    def build_perception(self) -> Perception:
+        return Perception(self.scene, self.detector, self.tracker, period=LOOK_PERIOD_S)
 
     def build_scene(self) -> Scene:
         return build_scene(self.layout)
 
     def enroll(self) -> None:
+        from simulation.objects import Placement, footprint_radius
+
         def alone(key: str, yaw: float, pose: str = "upright") -> Scene:
-            return Scene((0.28, -0.27), self.box, work_platform_height=PLATFORM, pick_object=key, pick_pose=pose,
+            # Where the detector sees the whole object: (0.28, -0.27) unless that puts
+            # part of it inside the box exclusion or past the workspace edge (with the
+            # bin_conveyor box a lying can's edge showed as a second, sliver object).
+            r = footprint_radius(Placement(key, (0.0, 0.0), pose, yaw))
+            x_low, x_high = self.detector.workspace_x
+            x = max(x_low + r + C.PATH_CLEARANCE, min(0.28, x_high - r - C.PATH_CLEARANCE))
+            y = -max(0.27, self.detector.basket_margin + r + C.PATH_CLEARANCE)
+            return Scene((x, y), self.box, work_platform_height=PLATFORM, pick_object=key, pick_pose=pose,
                          pick_yaw_deg=yaw, basket_half_size=self.box_half, basket_wall_height=self.box_wall)
 
         self.detector.enroll(alone)
 
     def look(self) -> list:
-        detections = self.detector.detect(self.scene.data, unique=False)
-        self.tracker.update(detections, float(self.scene.data.time))
+        detections = self.perception.look().detections.get("table", [])
         unknown = [d for d in detections if d.label is None]
         if unknown:
             print("   unidentified: " + "; ".join(
@@ -177,7 +203,7 @@ class BinTask:
         kind), for every pose estimate of a pick -- retries included."""
         def fresh() -> np.ndarray | None:
             kind = self.scene.object_types[name]
-            detections = [d for d in self.detector.detect(self.scene.data, unique=False) if d.label == kind]
+            detections = [d for d in self.perception.look().detections.get("table", []) if d.label == kind]
             if not detections:
                 raise RuntimeError(f"perception failed: {name} not seen any more")
             here = self.scene.object_position_of(name)[:2]
@@ -199,7 +225,12 @@ class BinTask:
             return self._run()
         finally:
             pose_source.POSE_LISTENERS.remove(self.pose_log)
-            self.recorder.extra = self.pose_log.arrays()
+            self.recorder.extra = {**self.pose_log.arrays(), **self.perception.log.arrays()}
+            self.perception.close()
+            looks = self.perception.look_wall_seconds
+            if looks:
+                print(f"perception: {len(looks)} looks, {np.mean(looks) * 1000:.0f} ms each (wall), "
+                      f"{np.sum(looks):.0f} s in all")
 
     def _run(self) -> BinResult:
         started = time.perf_counter()
@@ -210,11 +241,11 @@ class BinTask:
         attempts: dict[str, int] = {}
         for arm in ("right", "left"):
             over: Demo | None = None  # the demo whose release left this arm over the box
-            spots = list(self.drop_spots[arm])
+            spots = list(self.drop_spots[arm]) if self.drop_spots is not None else None
             empty_looks = 0
-            while len(result.per_arm[arm]) < PICKS_PER_ARM:
+            while len(result.per_arm[arm]) < self.picks_per_arm:
                 detections = self.look()
-                mine = [d for d in detections if (d.centroid[1] < 0) == (arm == "right")]
+                mine = [d for d in detections if (d.centroid[1] < 0) == (arm == "right") and self.wanted(d.label)]
                 mine = [d for d in mine if attempts.get(self.instance_of(d), 0) < MAX_ATTEMPTS]
                 seen = ", ".join(f"{d.label} at {np.round(d.centroid[:2], 3).tolist()}" for d in detections)
                 print(f"[look t={scene.data.time:6.1f}s] {seen or 'nothing on the table'}")
@@ -225,7 +256,8 @@ class BinTask:
                     over = None
                     continue
                 if not mine and empty_looks < 2 and any(
-                        (t.position[1] < 0) == (arm == "right") and t.missed <= 1 for t in self.tracker.tracks.values()):
+                        (t.position[1] < 0) == (arm == "right") and t.missed <= 1 and self.wanted(t.label)
+                        for t in self.tracker.tracks.values()):
                     # Objects seen on this side a moment ago: look again before giving up.
                     empty_looks += 1
                     self._settle(0.5)
@@ -237,13 +269,18 @@ class BinTask:
                 detection = min(mine, key=lambda d: float(np.hypot(d.centroid[0] - self.box[0], d.centroid[1] - self.box[1])))
                 name = self.instance_of(detection)
                 attempts[name] = attempts.get(name, 0) + 1
-                spot = spots[0] if spots else (0.0, -0.06 if arm == "right" else 0.06)
-                print(f"== {arm} arm -> {detection.label} ({name}), attempt {attempts[name]}, drop over box spot {spot}")
+                if spots is None:
+                    spot, candidates = None, self.drop_candidates(arm, name)
+                else:
+                    spot, candidates = (spots[0] if spots else (0.0, -0.06 if arm == "right" else 0.06)), None
+                print(f"== {arm} arm -> {detection.label} ({name}), attempt {attempts[name]}, "
+                      f"drop spot {spot if spot is not None else 'chosen by the planner'}")
                 self.recorder.caption = f"{arm} arm -> {detection.label} ({name})"
                 scene.set_target(name)
                 demo = Demo(scene=scene, side=arm, pose_backend=self.pose_backend, release="drop",
                             place_offset=spot, detection_mask=detection.mask, mask_source=self.mask_source(name),
-                            stay_over_basket=True, start_over_basket=over is not None, motion=self.motion)
+                            stay_over_basket=True, start_over_basket=over is not None, motion=self.motion,
+                            place_candidates=candidates)
                 trial = run_trial(demo, self.recorder)
                 self._settle(SETTLE_AFTER_DROP_S)
                 ok = scene.object_in_basket(name)
@@ -260,10 +297,13 @@ class BinTask:
                 if trial.failure_reason:
                     print(f"   (episode error: {trial.failure_reason.splitlines()[0][:200]})")
                 self.recorder.caption = f"{arm} arm: {name} {'in the box' if ok else 'missed'}"
+                self.on_pick(name, ok)
                 if ok:
                     result.per_arm[arm].append(name)
                     if spots:
                         spots.pop(0)
+                    if demo.place_offset is not None:
+                        self.dropped[arm].append(tuple(float(v) for v in demo.place_offset[:2]))
                 if over is None:
                     self._home(arm)
             if over is not None and (self.keep_over_last and arm == "left"):
@@ -275,6 +315,25 @@ class BinTask:
         result.sim_seconds = float(scene.data.time)
         result.wall_seconds = time.perf_counter() - started
         return result
+
+    def drop_candidates(self, arm: str, name: str, count: int = 6) -> list[tuple[float, float]]:
+        """Drop spots to try for `name`, best first (layout.drop_spot_candidates)."""
+        from simulation.objects import Placement, footprint_radius
+        from simulation.pick_place.layout import drop_spot_candidates
+
+        kind = self.scene.object_types[name]
+        placement = next((p for p in self.layout if p.label == name), None) or Placement(kind, (0.0, 0.0))
+        everywhere = self.dropped["right"] + self.dropped["left"]  # either arm's drops are taken space
+        return drop_spot_candidates(self.box_half, arm, footprint_radius(placement), everywhere)[:count]
+
+    # ---------------------------------------------------------------- hooks
+    def wanted(self, label: str | None) -> bool:
+        """Is an object of this kind to be picked? (product.cell: only what the order
+        still needs.) Everything identified, by default."""
+        return label is not None
+
+    def on_pick(self, name: str, ok: bool) -> None:
+        """Called after every pick attempt with its outcome (the box check)."""
 
     def after_table(self, result: BinResult) -> None:
         """Hook after both arms have cleared the table (bin_conveyor_task: the belt)."""
@@ -295,6 +354,7 @@ class BinTask:
         executor = Executor(scene)
         executor.viewer = self.recorder
         executor.active_side = side
+        self.recorder.phase = f"{side} home"
         try:
             executor.move_to({f"{side}_hand": scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS)}, C.RELEASE_SECONDS)
             # Straight up first: a failed pick can leave the hand low over the table or
@@ -315,84 +375,27 @@ class BinTask:
             print(f"   (homing the {side} arm stopped: {str(error).splitlines()[0]})")
 
 
-def _gl_renderer() -> str:
-    try:
-        from OpenGL import GL
+def replay(path: Path, speed: float = 1.0, scene_builder=build_scene, quality: str = "high", show_ui: bool = False,
+           hold: bool = True) -> dict:
+    """Play a saved recording in the MuJoCo viewer (replay_view.play: wall-clock paced,
+    interpolated), with the 6D pose estimates drawn; keeps the last frame up until the
+    window is closed."""
+    from simulation.pick_place.perception_loop import DetectionReplayOverlay
+    from simulation.pick_place.pose_overlay import PoseReplayOverlay
+    from simulation.pick_place.replay_view import play
 
-        context = mujoco.GLContext(64, 64)
-        context.make_current()
-        return GL.glGetString(GL.GL_RENDERER).decode()
-    except Exception:  # noqa: BLE001 - informational only
-        return "unknown (Windows: Settings > System > Display > Graphics > python.exe > High performance)"
-
-
-def replay(path: Path, speed: float = 1.0, scene_builder=build_scene) -> None:
-    """Play a saved recording in the MuJoCo viewer at real speed, then keep the last
-    frame up until the window is closed."""
-    import mujoco.viewer
-
-    import ctypes
-
-    try:
-        ctypes.windll.winmm.timeBeginPeriod(1)  # 1 ms sleeps: the default 15.6 ms made playback stutter
-    except (AttributeError, OSError):
-        pass
     recording = np.load(path)
-    times, qpos, captions = recording["times"], recording["qpos"], recording["captions"]
-    # 6D pose events (recordings from before they existed have none).
-    pose_times = recording["pose_times"] if "pose_times" in recording else np.zeros(0)
-    if len(pose_times):
-        pose_names, pose_mats = recording["pose_names"], recording["pose_mats"]
-        pose_boxes, pose_images = recording["pose_boxes"], recording["pose_images"]
-    shown = -1
-    scene = scene_builder()
-    model, data = scene.model, scene.data
-    with mujoco.viewer.launch_passive(model, data) as viewer:
-        print("OpenGL renderer:", _gl_renderer())
-        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-        viewer.cam.lookat[:] = [0.30, 0.0, 0.20]
-        viewer.cam.azimuth, viewer.cam.elevation, viewer.cam.distance = 180.0, -35.0, 1.45
-        start_wall, start_sim, caption = time.perf_counter(), float(times[0]), None
-        for t, q, text in zip(times, qpos, captions):
-            if not viewer.is_running():
-                return
-            with viewer.lock():
-                data.qpos[:] = q
-                data.time = float(t)
-                mujoco.mj_kinematics(model, data)
-                # The latest estimate, shown for POSE_SHOW_SECONDS: its box and axes in
-                # 3-D, and the annotated head-camera image in the bottom-left corner.
-                current = int(np.searchsorted(pose_times, float(t), side="right")) - 1
-                if current >= 0 and float(t) - float(pose_times[current]) > POSE_SHOW_SECONDS:
-                    current = -1
-                viewer.user_scn.ngeom = 0
-                if current >= 0:
-                    add_pose_markers(viewer.user_scn, pose_mats[current], pose_boxes[current])
-                if current != shown:
-                    shown = current
-                    try:
-                        if current >= 0:
-                            viewer.set_images((mujoco.MjrRect(0, 0, pose_images.shape[2], pose_images.shape[1]),
-                                               np.ascontiguousarray(pose_images[current])))
-                        else:
-                            viewer.clear_images()
-                    except (AttributeError, TypeError) as error:
-                        print(f"(camera inset unavailable: {error})")
-                if text != caption:
-                    caption = text
-                    try:
-                        viewer.set_texts((mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                                          f"t = {t:5.1f} s", str(text)))
-                    except (AttributeError, TypeError):
-                        pass
-            viewer.sync()
-            ahead = (float(t) - start_sim) / speed - (time.perf_counter() - start_wall)
-            if ahead > 0.0:
-                time.sleep(ahead)
-        print("playback finished; close the viewer window to exit")
-        while viewer.is_running():
-            viewer.sync()
-            time.sleep(0.05)
+    overlays = (DetectionReplayOverlay(recording), PoseReplayOverlay(recording, POSE_SHOW_SECONDS))
+    return play(path, lambda _recording: scene_builder(), speed=speed, quality=quality, show_ui=show_ui,
+                overlays=overlays, hold=hold)
+
+
+def add_replay_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--speed", type=float, default=1.0, help="playback speed factor")
+    parser.add_argument("--quality", default="high", choices=("high", "fast"),
+                        help="fast: no shadows/reflections (smoother on a laptop GPU)")
+    parser.add_argument("--ui", action="store_true", help="show the viewer's side panels")
+    parser.add_argument("--no-hold", action="store_true", help="close the viewer when playback ends")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -403,10 +406,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--motion", default="waypoints", choices=("waypoints", "mink"))
     parser.add_argument("--no-view", action="store_true", help="simulate and save only")
     parser.add_argument("--replay", type=Path, help="play a saved recording and exit")
-    parser.add_argument("--speed", type=float, default=1.0, help="playback speed factor")
+    add_replay_arguments(parser)
     args = parser.parse_args(argv)
     if args.replay:
-        replay(args.replay, args.speed)
+        replay(args.replay, args.speed, quality=args.quality, show_ui=args.ui, hold=not args.no_hold)
         return
     task = BinTask(pose_backend=args.pose_backend, motion=args.motion)
     try:
@@ -418,7 +421,7 @@ def main(argv: list[str] | None = None) -> None:
     print("\n" + result.summary())
     print(f"recording: {args.frames} ({len(task.recorder.times)} frames); report: {args.report}")
     if not args.no_view:
-        replay(args.frames, args.speed)
+        replay(args.frames, args.speed, quality=args.quality, show_ui=args.ui, hold=not args.no_hold)
 
 
 if __name__ == "__main__":

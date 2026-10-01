@@ -242,6 +242,9 @@ class ConveyorDemo(Demo):
             target = start + self.velocity * (C.PROOF_LIFT_SECONDS * f) + np.array([0.0, 0.0, C.PROOF_LIFT_HEIGHT * f])
             seed = solve_pose_ik(self.model, side, target, self.follow_orientation, seed)
             path.append(seed)
+        # Equal time slots (follow), not follow_path: this path is timed -- the wrist
+        # must move with the belt at every instant, and a bell-shaped speed profile
+        # would start it at rest while the belt drags the object.
         ex.follow({f"{side}_arm": path}, [C.PROOF_LIFT_SECONDS / steps] * steps)
         rise = float(scene.object_position()[2]) - object_before
         hand_rise = float(scene.wrist_position(side)[2]) - hand_before

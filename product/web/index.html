@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PickCell</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--muted:#5b6475;--line:#e3e6ec;--ok:#1a7f37;--warn:#b35900;--bad:#c62828;--accent:#2f6feb}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#171b23;--ink:#e6e9ef;--muted:#9aa3b2;--line:#2a303c;--ok:#3fb950;--warn:#e3a33b;--bad:#ff6b6b;--accent:#58a6ff}}
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
+main{max-width:1080px;margin:0 auto;padding:20px 16px 48px}h1{font-size:22px;margin:0}h2{font-size:16px;margin:0 0 10px}
+.sub{color:var(--muted);margin:2px 0 18px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+.two{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.sku{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
+.sku small{color:var(--muted);display:block}input,select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+input[type=number]{width:72px}.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.row label{font-size:13px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}button:disabled{opacity:.5;cursor:default}
+button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line);padding:5px 10px;font-weight:500}
+.err{color:var(--bad);min-height:1.5em}.k{color:var(--muted);font-size:13px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px;max-height:280px;overflow:auto;white-space:pre-wrap;margin:8px 0 0}
+table{width:100%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--muted);font-weight:600;font-size:13px}
+.steps{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}.steps span{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.steps span.on{background:var(--accent);color:#fff;border-color:var(--accent)}.scroll{overflow-x:auto}a{color:var(--accent)}
+</style>
+</head>
+<body>
+<main>
+  <h1>PickCell: cell robot soạn đơn</h1>
+  <p class="sub">OpenArm hai tay + Inspire RH56 + camera D435 · digital twin MuJoCo · lấy hàng từ bàn và băng chuyền vào thùng đơn</p>
+  <div class="two">
+    <section class="card">
+      <h2>Đơn mới</h2>
+      <div id="skus"></div>
+      <div class="row">
+        <label>Mã đơn (tuỳ chọn)<input id="order_id" placeholder="tự sinh" maxlength="40"></label>
+        <label>Bố cục<select id="layout"><option value="">Cố định (demo)</option><option value="seed">Ngẫu nhiên theo seed</option></select></label>
+        <label id="seedbox" hidden>Seed<input id="seed" type="number" min="0" step="1" value="1"></label>
+        <label>Ước lượng pose<select id="backend"><option value="gt">gt (nhanh)</option><option value="foundationpose">FoundationPose (WSL, chậm)</option></select></label>
+      </div>
+      <div class="row"><button id="send">Gửi đơn</button></div>
+      <p class="err" id="err"></p>
+      <p class="k">Hàng có trong cell ở bố cục cố định: trên bàn 1 lon (nằm), 1 đào, 1 táo, 1 cam; trên băng 2 lon. Món không có hàng sẽ báo "thiếu hàng".</p>
+    </section>
+    <section class="card">
+      <h2>Đang chạy</h2>
+      <div id="job" class="k">Chưa có đơn nào trong phiên này.</div>
+    </section>
+  </div>
+  <section class="card">
+    <h2>Các đơn đã chạy</h2>
+    <div class="scroll"><table><thead><tr><th>Đơn</th><th>Trạng thái</th><th>Món trong thùng</th><th>Mispick</th><th>Sim (s)</th><th>Không va chạm</th><th></th></tr></thead>
+    <tbody id="runs"><tr><td colspan="7" class="k">Đang tải…</td></tr></tbody></table></div>
+  </section>
+</main>
+<script>
+const STATUS={complete:["Đủ đơn","ok"],short:["Thiếu hàng","warn"],failed:["Lỗi soạn","bad"]};
+const PHASES=["perceive","plan","ready","reach","grasp","carry","release"];
+const $=id=>document.getElementById(id);
+let current=null,timer=null;
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+
+async function loadCatalog(){
+  const cat=await (await fetch("/api/catalog")).json();
+  $("skus").innerHTML=Object.entries(cat).map(([sku,v])=>
+    `<div class="sku"><div><b>${esc(sku)}</b><small>${esc(v.name)}</small></div><input type="number" min="0" max="10" step="1" value="0" data-sku="${esc(sku)}" aria-label="Số lượng ${esc(sku)}"></div>`).join("");
+}
+async function loadRuns(){
+  const runs=await (await fetch("/api/runs")).json();
+  $("runs").innerHTML=runs.length?runs.map(r=>{const [t,c]=STATUS[r.status]||[r.status,""];
+    return `<tr><td><a href="${r.dashboard}" target="_blank">${esc(r.order_id)}</a><div class="k">${esc(r.run)}</div></td><td class="${c}">${t}</td><td>${esc(r.items_in_tote)}</td><td>${r.mispicks}</td><td>${Math.round(r.sim_seconds)}</td><td>${r.collision_free?"Đạt":"Không"}</td>
+    <td><button class="ghost" onclick="replay('${esc(r.run)}')">Replay 3D</button></td></tr>`}).join(""):`<tr><td colspan="7" class="k">Chưa có lần chạy.</td></tr>`;
+}
+async function replay(run){
+  const r=await fetch(`/api/runs/${encodeURIComponent(run)}/replay`,{method:"POST"});const j=await r.json();
+  alert(j.message||j.error);
+}
+$("layout").onchange=()=>{$("seedbox").hidden=$("layout").value!=="seed"};
+$("send").onclick=async()=>{
+  $("err").textContent="";
+  const items={};document.querySelectorAll("[data-sku]").forEach(i=>{const q=parseInt(i.value||"0",10);if(q>0)items[i.dataset.sku]=q});
+  if(!Object.keys(items).length){$("err").textContent="Chọn ít nhất một món.";return}
+  const body={items,order_id:$("order_id").value.trim()||undefined,pose_backend:$("backend").value,seed:$("layout").value==="seed"?$("seed").value:undefined};
+  $("send").disabled=true;
+  try{const r=await fetch("/api/orders",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json();if(!r.ok)throw new Error(j.error);current=j.job;poll();}
+  catch(e){$("err").textContent=e.message}finally{$("send").disabled=false}
+};
+async function poll(){
+  clearTimeout(timer);if(!current)return;
+  const j=await (await fetch(`/api/orders/${current}`)).json();
+  const steps=PHASES.map(p=>`<span class="${j.phase===p?"on":""}">${p}</span>`).join("");
+  let head=`<b>${esc(j.order_id)}</b> · ${Object.entries(j.order||{}).map(([k,v])=>esc(k)+" x"+v).join(", ")}<br>`;
+  if(j.status==="queued")head+=`<span class="k">Đang chờ, vị trí ${j.queue_position} trong hàng</span>`;
+  else if(j.status==="running")head+=`<span class="k">Đang chạy · ${j.elapsed_s??0} s</span><div class="steps">${steps}</div>`;
+  else if(j.status==="done"){const [t,c]=STATUS[j.order_status]||[j.order_status,""];head+=`<span class="${c}"><b>${t}</b></span> · ${j.elapsed_s} s · <a href="${j.dashboard}" target="_blank">Mở dashboard</a>`}
+  else head+=`<span class="bad">${esc(j.error||"lỗi")}</span>`;
+  $("job").innerHTML=head+`<pre>${esc((j.log||[]).join("\n"))}</pre>`;
+  if(j.status==="done"||j.status==="error"){loadRuns();return}
+  timer=setTimeout(poll,2000);
+}
+loadCatalog();loadRuns();
+</script>
+</body>
+</html>

@@ -38,6 +38,42 @@ def rotation_y(degrees: float) -> np.ndarray:
     return np.array([[np.cos(angle), 0.0, np.sin(angle)], [0.0, 1.0, 0.0], [-np.sin(angle), 0.0, np.cos(angle)]])
 
 
+def path_spline(points: list[np.ndarray], samples: int = 200):
+    """(q(s) for s in [0, 1], travel): a C1 shape-preserving cubic (PCHIP) through
+    `points` with the chord-length parameter, and the largest per-joint travel along
+    it (rad, summed |dq| over `samples` evaluations) -- what a speed limit applies to.
+    Repeated points are dropped; one or two distinct points give a straight line.
+
+    PCHIP, not a C2 natural spline: between two way points every joint stays inside
+    the range of its two end values (no overshoot), so the path is never closer to a
+    joint limit than its way points are. The natural spline through raise -> hover ->
+    ready overshot below the 3 deg margin on the first pick of the conveyor task."""
+    from scipy.interpolate import PchipInterpolator
+
+    kept = [np.asarray(points[0], dtype=float)]
+    for point in points[1:]:
+        if float(np.linalg.norm(np.asarray(point, dtype=float) - kept[-1])) > 1e-9:
+            kept.append(np.asarray(point, dtype=float))
+    if len(kept) == 1:
+        constant = kept[0].copy()
+        return (lambda s: constant.copy()), 0.0
+    chords = np.linalg.norm(np.diff(np.asarray(kept), axis=0), axis=1)
+    u = np.concatenate([[0.0], np.cumsum(chords)]) / float(np.sum(chords))
+    if len(kept) == 2:
+        a, b = kept
+
+        def line(s: float) -> np.ndarray:
+            return a + min(max(s, 0.0), 1.0) * (b - a)
+        return line, float(np.max(np.abs(b - a)))
+    spline = PchipInterpolator(u, np.asarray(kept), axis=0)
+    dense = spline(np.linspace(0.0, 1.0, samples + 1))
+    travel = float(np.max(np.sum(np.abs(np.diff(dense, axis=0)), axis=0)))
+
+    def curve(s: float) -> np.ndarray:
+        return spline(min(max(s, 0.0), 1.0))
+    return curve, travel
+
+
 def quintic(tau: float) -> float:
     """Zero-jerk time scaling s(tau) for tau in [0, 1]: zero velocity *and* zero
     acceleration at both ends, unlike a plain cubic smoothstep."""

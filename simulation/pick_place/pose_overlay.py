@@ -139,6 +139,33 @@ class PoseEventLog:
         )
 
 
+class PoseReplayOverlay:
+    """Replay overlay: the latest 6D estimate (for `show_seconds`) as a 3-D box + axes,
+    and its annotated head-camera image in the viewer's bottom-left corner."""
+
+    def __init__(self, recording, show_seconds: float) -> None:
+        self.times = recording["pose_times"] if "pose_times" in recording.files else np.zeros(0)
+        if len(self.times):
+            self.mats, self.boxes, self.images = recording["pose_mats"], recording["pose_boxes"], recording["pose_images"]
+        self.show_seconds = show_seconds
+        self.shown = -1
+
+    def current(self, t: float) -> int:
+        index = int(np.searchsorted(self.times, t, side="right")) - 1
+        if index >= 0 and t - float(self.times[index]) > self.show_seconds:
+            return -1
+        return index
+
+    def markers(self, scn: mujoco.MjvScene, t: float) -> None:
+        index = self.current(t)
+        if index >= 0:
+            add_pose_markers(scn, self.mats[index], self.boxes[index])
+
+    def image(self, t: float):
+        index = self.current(t)
+        return None if index < 0 else ("pose", index, self.images[index])
+
+
 def add_pose_markers(scn: mujoco.MjvScene, pose: np.ndarray, box: np.ndarray) -> None:
     """Oriented box edges and x/y/z arrows at `pose` into the viewer's user scene."""
     def connector(kind, width, a, b, rgba) -> None:

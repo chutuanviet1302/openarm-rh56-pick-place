@@ -86,6 +86,9 @@ class GraspPlanner:
         # Object width across the jaw for the heading being planned (off-square grasps
         # of a cylinder span more than its diameter); None = scene.object_extents().
         self.jaw_width: float | None = None
+        # Largest jaw offset off square-on to try (None: all of GRASP_JAW_OFFSETS_DEG).
+        # Demo tries square-on grasps at every drop spot before any offset one.
+        self.max_jaw_offset_deg: float | None = None
 
     # ------------------------------------------------------------------ hand geometry
     def local_jaw_offsets(self) -> tuple[np.ndarray, np.ndarray]:
@@ -327,6 +330,8 @@ class GraspPlanner:
             for offset in offsets:
                 yaw = round((base + offset + 180.0) % 360.0 - 180.0, 1)
                 pairs.setdefault(yaw, offset)
+        if self.max_jaw_offset_deg is not None:
+            pairs = {yaw: offset for yaw, offset in pairs.items() if abs(offset) <= self.max_jaw_offset_deg}
         return sorted(pairs.items(), key=lambda item: (abs(item[1]), abs(item[0])))
 
     def _tilted(self, tilt: tuple[str, float] | None) -> np.ndarray:
@@ -838,7 +843,11 @@ class GraspPlanner:
         """Throwaway MjData with the active arm at `arm_joints` and the hand pre-shaped
         (thumb opposed, fingers part-closed) or, with `closed`, a fist as at attention."""
         scene, model = self.scene, self.check_model
-        data = mujoco.MjData(model)
+        # One scratch MjData per planner, overwritten each call (every caller reads it
+        # at once): allocating one per check was ~27% of a hand_contacts call.
+        data = self.__dict__.get("_scratch")
+        if data is None:
+            data = self._scratch = mujoco.MjData(model)
         data.qpos[:] = scene.data.qpos
         side = self.side
         data.qpos[scene.arm_qpos[side]] = arm_joints
