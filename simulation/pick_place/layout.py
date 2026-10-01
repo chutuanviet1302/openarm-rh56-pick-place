@@ -143,12 +143,27 @@ def box_clearance_ok(placement: Placement, box_half, side: str) -> bool:
         box_half[1] + BASKET_WALL_THICKNESS + HAND_HALF_WIDTH[side] - 1e-6)
 
 
-def drop_spot_candidates(box_half, side: str, radius: float, dropped: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """Drop offsets from the box centre for one object of footprint radius `radius`:
-    a DROP_GRID_STEP grid over the box's inside (the object's circle inside the walls;
-    a circle wider than the box keeps to the centre line), on this arm's half (its own
-    side of y = 0: the arms never reach across each other). Order: first the free
-    spots -- at least 2 x radius from every spot already dropped at (by either arm),
+def object_height(placement: Placement) -> float:
+    """Vertical extent (m) of the object in its rest pose."""
+    from simulation.objects import collision_points, quat_to_matrix, spawn_quat
+
+    z = (collision_points(placement.key) @ quat_to_matrix(spawn_quat(placement)).T)[:, 2]
+    return float(z.max() - z.min())
+
+
+def drop_spot_candidates(box_half, side: str, radius: float, dropped: list[tuple[float, ...]],
+                         height: float | None = None) -> list[tuple[float, float]]:
+    """Drop offsets from the box centre for one object of footprint radius `radius`
+    and height `height`: a DROP_GRID_STEP grid over the box's inside, on this arm's half
+    (its own side of y = 0: the arms never reach across each other).
+
+    Wall margin: the object's circle inside the walls, and -- an object can tip over as
+    it lands -- room for it to fall flat inside: max(radius, height - radius) from the
+    centre (a 10 cm can let go 4 cm from the wall tipped onto the 8 cm wall and stayed
+    there, 2026-10-01). A margin wider than the box keeps to the centre line.
+
+    Order: first the free spots -- at least radius + the earlier object's radius from
+    every spot already dropped at (`dropped`: (x, y) or (x, y, radius), by either arm),
     so the object does not land on another -- nearest the centre of this arm's half;
     then the rest, farthest from the dropped spots first.
 
@@ -156,17 +171,19 @@ def drop_spot_candidates(box_half, side: str, radius: float, dropped: list[tuple
     whose grip slipped 49 mm on the proof lift, 2026-10-01; the centre of the arm's
     half is where the plan-checked drops of the 6/6 runs were.)"""
     sign = -1.0 if side == "right" else 1.0
-    half_x = max(0.0, box_half[0] - radius)
+    margin = radius if height is None else max(radius, height - radius)
+    half_x = max(0.0, box_half[0] - margin)
     steps = np.arange(0.0, half_x + 1e-9, DROP_GRID_STEP)
     xs = np.unique(np.round(np.concatenate([-steps, steps]), 6))  # symmetric: the centre line is a candidate
-    reach_y = max(0.0, box_half[1] - radius)
+    reach_y = max(0.0, box_half[1] - margin)
     ys = np.arange(0.0, reach_y + 1e-9, DROP_GRID_STEP) * sign
     spots = [(float(x), float(y)) for x in xs for y in ys]
     home = (0.0, sign * 0.5 * box_half[1])
 
     def key(spot):
-        far = min((float(np.hypot(spot[0] - d[0], spot[1] - d[1])) for d in dropped), default=np.inf)
-        free = far >= 2.0 * radius
+        gaps = [float(np.hypot(spot[0] - d[0], spot[1] - d[1])) - (d[2] if len(d) > 2 else radius) for d in dropped]
+        far = min(gaps, default=np.inf)
+        free = far >= radius
         return (not free, 0.0 if free else -round(far, 4), round(float(np.hypot(spot[0] - home[0], spot[1] - home[1])), 4))
     return sorted(spots, key=key)
 

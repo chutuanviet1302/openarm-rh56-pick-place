@@ -27,6 +27,8 @@ def render_gif(frames_path: Path, out: Path, speed: float = 10.0, fps: int = 15,
     scene = _builder_for(frames_path)()
     model, data = scene.model, scene.data
     overlay = DetectionReplayOverlay(rec) if detections else None
+    if overlay is not None:
+        overlay.bind(model, data)
     width, height = size
     renderer = mujoco.Renderer(model, height, width)
     cam = mujoco.MjvCamera()

@@ -148,7 +148,7 @@ class BinConveyorTask(BinTask):
         if not hasattr(self, "belt_detector"):  # BinTask.__init__ runs first; replaced above
             return super().build_perception()
         return Perception(self.scene, self.detector, self.tracker, self.belt_detector, self.belt_tracker,
-                          period=LOOK_PERIOD_S)
+                          period=LOOK_PERIOD_S, phase_source=lambda: self.recorder.phase)
 
     def enroll(self) -> None:
         super().enroll()
@@ -213,6 +213,7 @@ class BinConveyorTask(BinTask):
                 self.arm_over.pop(other).return_home()
                 continue  # that took a while: look and plan again
             scene.set_target(name)
+            self.perception.set_target(arm, detection)
             if self.belt_drop_spots is not None:
                 spot, candidates = self.belt_drop_spots[arm][min(counts[arm], len(self.belt_drop_spots[arm]) - 1)], None
             else:
@@ -249,7 +250,7 @@ class BinConveyorTask(BinTask):
                 counts[arm] += 1
                 result.per_arm[arm].append(name)
                 if demo.place_offset is not None:
-                    self.dropped[arm].append(tuple(float(v) for v in demo.place_offset[:2]))
+                    self.dropped[arm].append(self.dropped_entry(name, demo.place_offset))
             self._home(arm)
         for demo in self.arm_over.values():
             demo.return_home()

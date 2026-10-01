@@ -35,6 +35,51 @@ class PerceptionLoopTest(unittest.TestCase):
         # 1.2 s of sim time at one look per 0.5 s: two more looks.
         self.assertEqual(len(task.perception.log.times) - looks_before, 2)
 
+    def test_no_robot_pixels_and_no_unidentified_objects(self):
+        look = self.task.perception.look()
+        self.assertGreater(int(look.frame.robot.sum()), 0)
+        for detections in look.detections.values():
+            for d in detections:
+                self.assertIsNotNone(d.label)
+                self.assertFalse(np.any(d.mask & look.frame.robot))
+
+    def test_held_object_follows_the_hand_and_hides_its_partial_views(self):
+        perception = self.task.perception
+        scene = self.task.scene
+        phase = {"value": "right reach"}
+        perception.phase_source = lambda: phase["value"]
+        try:
+            look = perception.look()
+            can = next(d for d in look.detections["table"] if d.label == "can")
+            perception.set_target("right", can)
+            phase["value"] = "right grasp"
+            perception.latest = None
+            first = perception.look()
+            self.assertEqual(len(first.held), 1)
+            held, box = first.held[0]
+            np.testing.assert_allclose(box, can.box, atol=0.01)   # where the camera saw it
+            rows = [r for r in perception.log.rows if r[0] == len(perception.log.times) - 1]
+            self.assertEqual([r[2] for r in rows].count("can"), 1)  # the held box only, no duplicate
+            self.assertEqual([r[1] for r in rows if r[2] == "can"], ["held"])
+            # The hand moves (the arm's joints): the box moves with it.
+            arm = scene.arm_qpos["right"]
+            saved = scene.data.qpos[arm].copy()
+            scene.data.qpos[arm[1]] += 0.2
+            mujoco.mj_kinematics(scene.model, scene.data)
+            from simulation.pick_place.perception_loop import hand_pose
+
+            position, rotation = hand_pose(scene.model, scene.data, "right")
+            moved = held.box(position, rotation)
+            self.assertGreater(float(np.linalg.norm(moved.mean(axis=0) - box.mean(axis=0))), 0.01)
+            scene.data.qpos[arm] = saved
+            mujoco.mj_forward(scene.model, scene.data)
+            phase["value"] = "right release"
+            perception.latest = None
+            self.assertEqual(perception.look().held, [])
+        finally:
+            perception.phase_source = lambda: self.task.recorder.phase
+            perception.set_target("right", None)
+
     def test_log_round_trips_into_the_replay_overlay(self):
         arrays = self.task.perception.log.arrays()
         n = len(arrays["det_label"])
@@ -48,7 +93,7 @@ class PerceptionLoopTest(unittest.TestCase):
 
         overlay = DetectionReplayOverlay(Recording(arrays))
         t = float(arrays["det_look_times"][0])
-        self.assertEqual(overlay.current(t), 0)
+        self.assertEqual(float(overlay.times[overlay.current(t)]), t)  # the latest look at that time
         scn = mujoco.MjvScene(self.task.scene.model, maxgeom=2000)
         overlay.markers(scn, t)
         self.assertGreater(scn.ngeom, 0)

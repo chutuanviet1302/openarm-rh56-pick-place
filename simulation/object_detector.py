@@ -43,6 +43,16 @@ DEPTH_STEP_M = 0.01         # neighbouring pixels further apart in range: an occ
 # Feature scales for the identity cost: a difference of one scale unit costs 1.
 SCALES = {"height": 0.012, "short": 0.012, "long": 0.012, "fill": 0.08, "hue": 0.06}
 MAX_COST = 12.0
+# Robot self-filter: the robot's own arm and hand pixels are removed before looking for
+# objects (it knows its geometry and joint angles -- as robot_self_filter does with a
+# real depth camera). Without it a hand over the table was an "unknown" object and a
+# can in a closing hand, merged with the fingers, was taken for an orange (2026-10-01).
+# The mask is grown by this many pixels: depth at a silhouette edge mixes hand and
+# whatever is behind it.
+ROBOT_MASK_GROW_PX = 2
+ROBOT_BODY_PREFIXES = ("openarm_left_link", "openarm_right_link", "inspire_")
+ROBOT_GEOM_GROUP = 5                # the robot-only render's geom group
+ROBOT_DEPTH_TOLERANCE_M = 0.005     # robot depth within this of the scene's: the robot is what is seen
 
 
 @dataclass
@@ -63,6 +73,7 @@ class CameraFrame:
     rgb: np.ndarray                   # (H, W, 3) uint8
     depth: np.ndarray                 # (H, W) m along the optical axis
     points: np.ndarray                # (H, W, 3) world, NaN where there is no depth
+    robot: np.ndarray | None = None   # (H, W) bool: pixels of the robot's own arms and hands
 
 
 @dataclass
@@ -74,6 +85,10 @@ class Detection:
     features: Features
     pixels: int
     track_id: int | None = None
+    # Touches the robot's own pixels: partly hidden by an arm or hand, so its visible
+    # shape and colour do not describe the whole object (2.4% of the labels taken from
+    # such views were wrong, full conveyor run 2026-10-01).
+    occluded: bool = False
 
 
 def _hue_distance(a: float, b: float) -> float:
@@ -138,10 +153,52 @@ class ObjectDetector:
         return cam @ T[:3, :3].T + T[:3, 3]
 
     # ------------------------------------------------------------------ detection
+    @staticmethod
+    def robot_geoms(model: mujoco.MjModel) -> np.ndarray:
+        """Geom ids on the robot's arms and hands (body or an ancestor named so)."""
+        ids = []
+        for geom in range(model.ngeom):
+            body = int(model.geom_bodyid[geom])
+            while body:
+                if (model.body(body).name or "").startswith(ROBOT_BODY_PREFIXES):
+                    ids.append(geom)
+                    break
+                body = int(model.body_parentid[body])
+        return np.asarray(ids, dtype=int)
+
+    def _robot_mask(self, model: mujoco.MjModel, data: mujoco.MjData, depth: np.ndarray) -> np.ndarray | None:
+        """Pixels of the robot's own arms and hands: its model alone rendered as depth at
+        the current joint angles (a copy of the model with only the arm and hand geoms
+        in a group of their own), where that depth is not behind the scene's. Only for
+        the detector's own model (enrollment scenes keep the arms out of the way)."""
+        if model is not self.model:
+            return None
+        if self.__dict__.get("_robot_view") is None:
+            import copy
+
+            robot_model = copy.copy(model)
+            robot_model.geom_group[:] = 0
+            robot_model.geom_group[self.robot_geoms(model)] = ROBOT_GEOM_GROUP
+            option = mujoco.MjvOption()
+            option.geomgroup[:] = 0
+            option.geomgroup[ROBOT_GEOM_GROUP] = 1
+            renderer = mujoco.Renderer(robot_model, HEIGHT, WIDTH)
+            renderer.enable_depth_rendering()
+            self._robot_view = (renderer, option)
+        renderer, option = self._robot_view
+        renderer.update_scene(data, camera=self.camera, scene_option=option)
+        robot_depth = renderer.render().astype(np.float64)
+        far = float(model.vis.map.zfar * model.stat.extent)
+        robot = (robot_depth > 0) & (robot_depth < 0.99 * far) & (robot_depth <= depth + ROBOT_DEPTH_TOLERANCE_M)
+        if ROBOT_MASK_GROW_PX:
+            robot = ndimage.binary_dilation(robot, iterations=ROBOT_MASK_GROW_PX)
+        return robot
+
     def frame(self, data: mujoco.MjData, renderer: mujoco.Renderer | None = None,
               model: mujoco.MjModel | None = None) -> "CameraFrame":
-        """One RGB-D frame of this detector's camera as world points; several detectors
-        on the same camera can share it (candidates(frame=...))."""
+        """One RGB-D frame of this detector's camera as world points, with the robot's
+        own pixels marked; several detectors on the same camera can share it
+        (candidates(frame=...))."""
         model = model or self.model
         own = renderer is None
         renderer = renderer or mujoco.Renderer(model, HEIGHT, WIDTH)
@@ -150,7 +207,7 @@ class ObjectDetector:
         finally:
             if own:
                 renderer.close()
-        return CameraFrame(rgb, depth, self._points(model, data, depth))
+        return CameraFrame(rgb, depth, self._points(model, data, depth), self._robot_mask(model, data, depth))
 
     def candidates(self, data: mujoco.MjData, renderer: mujoco.Renderer | None = None,
                    model: mujoco.MjModel | None = None, frame: "CameraFrame | None" = None) -> list[Detection]:
@@ -167,6 +224,8 @@ class ObjectDetector:
         )
         if self.basket_xy is not None:
             inside &= ~((np.abs(x - self.basket_xy[0]) < self.basket_margin) & (np.abs(y - self.basket_xy[1]) < self.basket_margin))
+        if frame.robot is not None:
+            inside &= ~frame.robot
         if inside.sum() < 1000:
             raise RuntimeError("perception failed: the workspace is not in view")
         heights = z[inside]
@@ -187,6 +246,7 @@ class ObjectDetector:
         step[:, :-1] |= np.abs(np.diff(rng, axis=1)) > DEPTH_STEP_M
         step[:-1, :] |= np.abs(np.diff(rng, axis=0)) > DEPTH_STEP_M
         labels, count = ndimage.label(mask & ~step, structure=np.ones((3, 3)))
+        touch = ndimage.binary_dilation(frame.robot, iterations=1) if frame.robot is not None else None
         found = []
         for index in range(1, count + 1):
             region = labels == index
@@ -195,7 +255,8 @@ class ObjectDetector:
                 continue
             region_points = points[region]
             found.append(Detection(None, np.inf, region, region_points.mean(axis=0),
-                                   self._features(region_points, rgb[region], surface), pixels))
+                                   self._features(region_points, rgb[region], surface), pixels,
+                                   occluded=bool(touch is not None and np.any(region & touch))))
         return found
 
     @staticmethod

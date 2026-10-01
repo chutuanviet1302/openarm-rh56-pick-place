@@ -128,6 +128,9 @@ def play(path: Path, scene_builder, speed: float = 1.0, quality: str = "high", s
     times, qpos, captions = recording["times"], recording["qpos"].copy(), recording["captions"]
     scene = scene_builder(recording)
     model, data = scene.model, scene.data
+    for overlay in overlays:
+        if hasattr(overlay, "bind"):
+            overlay.bind(model, data)   # overlays that follow the replayed robot (held object)
     quats = quaternion_slots(model)
     period = 1.0 / display_refresh_hz()
     ticks: list[float] = []

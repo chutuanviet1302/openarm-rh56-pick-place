@@ -168,7 +168,8 @@ class BinTask:
         self.recorder.hooks.append(self.perception.on_frame)
 
     def build_perception(self) -> Perception:
-        return Perception(self.scene, self.detector, self.tracker, period=LOOK_PERIOD_S)
+        return Perception(self.scene, self.detector, self.tracker, period=LOOK_PERIOD_S,
+                          phase_source=lambda: self.recorder.phase)
 
     def build_scene(self) -> Scene:
         return build_scene(self.layout)
@@ -277,6 +278,7 @@ class BinTask:
                       f"drop spot {spot if spot is not None else 'chosen by the planner'}")
                 self.recorder.caption = f"{arm} arm -> {detection.label} ({name})"
                 scene.set_target(name)
+                self.perception.set_target(arm, detection)
                 demo = Demo(scene=scene, side=arm, pose_backend=self.pose_backend, release="drop",
                             place_offset=spot, detection_mask=detection.mask, mask_source=self.mask_source(name),
                             stay_over_basket=True, start_over_basket=over is not None, motion=self.motion,
@@ -303,7 +305,7 @@ class BinTask:
                     if spots:
                         spots.pop(0)
                     if demo.place_offset is not None:
-                        self.dropped[arm].append(tuple(float(v) for v in demo.place_offset[:2]))
+                        self.dropped[arm].append(self.dropped_entry(name, demo.place_offset))
                 if over is None:
                     self._home(arm)
             if over is not None and (self.keep_over_last and arm == "left"):
@@ -316,15 +318,27 @@ class BinTask:
         result.wall_seconds = time.perf_counter() - started
         return result
 
+    def placement_of(self, name: str):
+        """The object's registry placement (pose, yaw) as laid out: table or belt."""
+        from simulation.objects import Placement
+
+        known = list(self.layout) + list(getattr(self, "belt_objects", []))
+        return next((p for p in known if p.label == name), None) or Placement(self.scene.object_types[name], (0.0, 0.0))
+
+    def dropped_entry(self, name: str, offset) -> tuple[float, float, float]:
+        from simulation.objects import footprint_radius
+
+        return (float(offset[0]), float(offset[1]), footprint_radius(self.placement_of(name)))
+
     def drop_candidates(self, arm: str, name: str, count: int = 6) -> list[tuple[float, float]]:
         """Drop spots to try for `name`, best first (layout.drop_spot_candidates)."""
-        from simulation.objects import Placement, footprint_radius
-        from simulation.pick_place.layout import drop_spot_candidates
+        from simulation.objects import footprint_radius
+        from simulation.pick_place.layout import drop_spot_candidates, object_height
 
-        kind = self.scene.object_types[name]
-        placement = next((p for p in self.layout if p.label == name), None) or Placement(kind, (0.0, 0.0))
+        placement = self.placement_of(name)
         everywhere = self.dropped["right"] + self.dropped["left"]  # either arm's drops are taken space
-        return drop_spot_candidates(self.box_half, arm, footprint_radius(placement), everywhere)[:count]
+        return drop_spot_candidates(self.box_half, arm, footprint_radius(placement), everywhere,
+                                    height=object_height(placement))[:count]
 
     # ---------------------------------------------------------------- hooks
     def wanted(self, label: str | None) -> bool:
