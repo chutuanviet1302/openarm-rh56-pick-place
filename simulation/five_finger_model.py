@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Sequence
 
 import mujoco
 import numpy as np
 
+from simulation.objects import OBJECTS, Placement, check_spacing, footprint_radius, spawn_height, spawn_origin_xy, spawn_quat
+from simulation.objects import body_name as object_body_name
 from simulation.openarm_mujoco import FLANGE_Z, configure_arm_servos, load_openarm_spec
 
 _PROJECT_ROOT = Path(os.environ.get("OPENARM_PROJECT_ROOT", Path(__file__).parents[1]))
@@ -172,7 +176,14 @@ def build_five_finger_spec(
     arm_half_separation: float | None = None, left_arm_mount_yaw_deg: float | None = None,
     right_arm_mount_yaw_deg: float | None = None, basket_stand_height: float = 0.0,
     basket_floor_tilt_deg: float = 0.0, work_platform_height: float = 0.0,
+    pick_object: str = "can", pick_pose: str = "upright", pick_yaw_deg: float = 0.0,
+    extra_objects: Sequence[Placement] = (),
+    conveyor: "Conveyor | None" = None,
+    basket_half_size: tuple[float, float] | None = None, basket_wall_height: float | None = None,
 ) -> mujoco.MjSpec:
+    """`pick_object`/`pick_pose`/`pick_yaw_deg`: which registry object (simulation.objects)
+    stands at `pick_position`, in which rest pose; `extra_objects`: more objects on the
+    same surface (they are obstacles until a later pick targets them)."""
     if not INSPIRE_ROOT.is_dir():
         raise FileNotFoundError("Inspire RH56DFX assets missing; clone correlllab/rh56_controller with h1_mujoco")
 
@@ -336,90 +347,50 @@ def build_five_finger_spec(
         if np.all(np.abs(pick_xy - riser_xy) < riser_half + OBJECT_RADIUS):
             raise ValueError("pick object overlaps the robot base")
 
-        # ── Resolve YCB mesh and texture from local assets/ycb/ ──────────
-        obj_dir = YCB_ASSET_ROOT / YCB_PICK_OBJECT_NAME
-        # Strip the "ycb_" prefix to get the bare asset name.
-        bare_name = YCB_PICK_OBJECT_NAME.removeprefix("ycb_")
-        mesh_file = obj_dir / "meshes" / f"{bare_name}.obj"
-        texture_file = obj_dir / "textures" / f"{bare_name}.png"
-        if not mesh_file.is_file():
-            raise FileNotFoundError(
-                f"YCB mesh asset missing: {mesh_file}  "
-                f"(copy from P-161/objects/ycb/{YCB_PICK_OBJECT_NAME}/)"
-            )
-        # ── Load mesh with real texture ──────────────────────────────────
-        # The soup can's mesh is already centred on its own origin (measured
-        # AABB centre is within 0.5 mm of zero), so no refpos correction.
-        arm.add_mesh(name="ycb_pick_object_mesh", file=str(mesh_file), scale=[1.0, 1.0, 1.0])
+        # ── Pick object (the planner's target) and any other objects ─────
+        # The target keeps the legacy names (body pick_bottle, joint
+        # pick_bottle_joint, geom pick_bottle_collision) whatever object it is, so the
+        # whole pick-place pipeline follows it; the others are obj_<key> bodies.
+        pick = Placement(pick_object, tuple(float(v) for v in pick_position), pick_pose, pick_yaw_deg)
+        extras = [Placement(p.key, tuple(float(v) for v in p.xy), p.pose, p.yaw_deg, p.name) for p in extra_objects]
+        labels = [pick.label] + [p.label for p in extras]
+        if len(set(labels)) != len(labels):
+            raise ValueError(f"each object instance needs its own name, got {labels}")
+        # Basket (or box container): half inner size along x and y, wall height.
+        bhx, bhy = basket_half_size or (BASKET_HALF_WIDTH, BASKET_HALF_WIDTH)
+        wall_height = basket_wall_height or BASKET_WALL_HEIGHT
+        check_spacing([pick, *extras])
+        for placement in extras:
+            xy = np.asarray(placement.xy)
+            if np.all(np.abs(xy - riser_xy) < riser_half + footprint_radius(placement)):
+                raise ValueError(f"{placement.key} overlaps the robot base")
+            basket_reach = np.array([bhx, bhy]) + BASKET_WALL_THICKNESS + footprint_radius(placement)
+            if np.all(np.abs(xy - np.asarray(basket_position, dtype=float)) < basket_reach):
+                raise ValueError(f"{placement.key} overlaps the basket")
+        table_z = TABLE_TOP_Z + work_platform_height
+        if conveyor is not None:
+            _add_conveyor(arm, conveyor, table_z)
 
-        # Texture & material: gives the visual geom the Campbell's label
-        # instead of a flat colour. If the texture PNG is missing we fall
-        # back gracefully to the geom rgba.
-        _has_texture = texture_file.is_file()
-        if _has_texture:
-            arm.add_texture(
-                name="ycb_can_texture",
-                type=mujoco.mjtTexture.mjTEXTURE_2D,
-                file=str(texture_file),
-            )
-            # MjSpec.add_material `textures` slot list: index-1 = diffuse map
-            # (matches MuJoCo XML's `texture=` attribute which maps to slot 1).
-            arm.add_material(
-                name="ycb_can_material",
-                textures=["", "ycb_can_texture", "", "", "", "", "", "", "", ""],
-                rgba=[1.0, 1.0, 1.0, 1.0],
-                specular=0.3,
-                shininess=0.2,
-            )
+        def surface_for(placement: Placement) -> float:
+            """The belt's top for an object standing on the belt strip, else the table
+            (or work platform) top."""
+            if conveyor is not None and abs(float(placement.xy[0]) - conveyor.x) <= 0.5 * conveyor.width:
+                return conveyor.top_z(table_z)
+            return table_z
 
-        # ── Pick object body ─────────────────────────────────────────────
-        # Pick location A, standing on the table top.
-        bottle = arm.worldbody.add_body(
-            name="pick_bottle",
-            pos=[float(pick_position[0]), float(pick_position[1]), OBJECT_HALF_HEIGHT + TABLE_TOP_Z + work_platform_height],
-        )
-        bottle.add_freejoint(name="pick_bottle_joint")
-        bottle.add_geom(
-            name="pick_bottle_collision",
-            type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-            # Collision cylinder matched to the real mesh AABB:
-            # radius 3.40 cm, half-height 5.09 cm.
-            size=[OBJECT_RADIUS, OBJECT_HALF_HEIGHT, 0.0],
-            mass=0.2,
-            friction=[1.2, 0.02, 0.002],
-            rgba=[0.0, 0.0, 0.0, 0.0],
-        )
-
-        # Visual geom: textured mesh with the real Campbell's soup label.
-        # When a texture is loaded, rgba must be white [1,1,1,1] because MuJoCo
-        # multiplies the geom rgba with the texture colour – any tint would
-        # obscure the label artwork.  Without texture we fall back to flat red.
-        visual_rgba = [1.0, 1.0, 1.0, 1.0] if _has_texture else [0.80, 0.16, 0.12, 1.0]
-        visual_kwargs = dict(
-            name="ycb_mustard_bottle_visual",
-            type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="ycb_pick_object_mesh",
-            # The mesh is centred on its own origin (AABB z -0.0516..+0.0502), so it
-            # must sit on the collision cylinder's origin. The old -OBJECT_HALF_HEIGHT
-            # offset drew the can 5cm below its physics body: half sunk into the table
-            # while the collision cylinder stood on top of it.
-            pos=[0.0, 0.0, OBJECT_HALF_HEIGHT - MESH_HALF_HEIGHT_BELOW],
-            mass=0.0,
-            rgba=visual_rgba,
-            contype=0,
-            conaffinity=0,
-            group=2,
-        )
-        if _has_texture:
-            visual_kwargs["material"] = "ycb_can_material"
-        bottle.add_geom(**visual_kwargs)
+        _add_object(arm, pick, surface_for(pick), body="pick_bottle", joint="pick_bottle_joint",
+                    collision="pick_bottle_collision", visual="ycb_mustard_bottle_visual")
+        for placement in extras:
+            name = object_body_name(placement.label)
+            _add_object(arm, placement, surface_for(placement), body=name, joint=f"{name}_joint",
+                        collision=f"{name}_collision", visual=f"{name}_visual")
         # Release point B. Full physical collision on all 4 walls, so a hand that comes
         # in too low is caught by the trajectory's basket-contact check.
         distance = float(np.hypot(basket_position[0] - pick_position[0], basket_position[1] - pick_position[1]))
         if distance < 0.15:
             raise ValueError(f"basket must be at least 15cm from the pick point, got {distance*100:.1f}cm")
         basket_xy = np.asarray(basket_position, dtype=float)
-        basket_outer_half = BASKET_HALF_WIDTH + BASKET_WALL_THICKNESS
+        basket_outer_half = np.array([bhx, bhy]) + BASKET_WALL_THICKNESS
         if np.all(np.abs(basket_xy - riser_xy) < riser_half + basket_outer_half):
             raise ValueError("basket overlaps the robot base")
         # Optional rectangular stand under the basket (same footprint as the basket's
@@ -449,7 +420,7 @@ def build_five_finger_spec(
                 name="place_basket_stand",
                 type=mujoco.mjtGeom.mjGEOM_BOX,
                 pos=[float(basket_position[0]), float(basket_position[1]), TABLE_TOP_Z + 0.5 * basket_stand_height],
-                size=[basket_outer_half, basket_outer_half, 0.5 * basket_stand_height],
+                size=[basket_outer_half[0], basket_outer_half[1], 0.5 * basket_stand_height],
                 rgba=[0.55, 0.45, 0.35, 1.0],
             )
         basket = arm.worldbody.add_body(
@@ -457,10 +428,12 @@ def build_five_finger_spec(
             pos=[float(basket_position[0]), float(basket_position[1]), BASKET_FLOOR_Z + basket_stand_height + work_platform_height],
         )
         basket_color = [0.1, 0.55, 0.2, 1.0]
-        bw = BASKET_HALF_WIDTH
-        wh = 0.5 * (BASKET_WALL_HEIGHT - 0.005)
+        if basket_half_size is not None:
+            basket_color = [0.62, 0.45, 0.28, 1.0]  # cardboard box
+        bw, bwy = bhx, bhy
+        wh = 0.5 * (wall_height - 0.005)
         wz = 0.005 + wh
-        basket.add_geom(name="place_basket_bottom", type=mujoco.mjtGeom.mjGEOM_BOX, size=[bw, bw, 0.005], rgba=basket_color)
+        basket.add_geom(name="place_basket_bottom", type=mujoco.mjtGeom.mjGEOM_BOX, size=[bw, bwy, 0.005], rgba=basket_color)
         # Optional V-shaped insert on the floor: two low-friction plates sloping down
         # at `basket_floor_tilt_deg` into a groove along x at y = BASKET_VALLEY_Y (toward
         # the left arm). A can set down anywhere on the -y side slides into the groove
@@ -484,11 +457,110 @@ def build_five_finger_spec(
                     size=[bw, 0.5 * length / np.cos(theta), 0.5 * thick],
                     friction=[BASKET_SLOPE_FRICTION, 0.005, 0.0001], priority=1, rgba=[0.3, 0.75, 0.4, 1.0],
                 )
-        basket.add_geom(name="place_basket_left", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[bw + 0.5 * BASKET_WALL_THICKNESS, 0.0, wz], size=[0.5 * BASKET_WALL_THICKNESS, bw + 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
-        basket.add_geom(name="place_basket_right", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[-(bw + 0.5 * BASKET_WALL_THICKNESS), 0.0, wz], size=[0.5 * BASKET_WALL_THICKNESS, bw + 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
-        basket.add_geom(name="place_basket_front", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, bw + 0.5 * BASKET_WALL_THICKNESS, wz], size=[bw, 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
-        basket.add_geom(name="place_basket_back", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, -(bw + 0.5 * BASKET_WALL_THICKNESS), wz], size=[bw, 0.5 * BASKET_WALL_THICKNESS, wh], rgba=basket_color)
+        t = BASKET_WALL_THICKNESS
+        basket.add_geom(name="place_basket_left", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[bw + 0.5 * t, 0.0, wz], size=[0.5 * t, bwy + t, wh], rgba=basket_color)
+        basket.add_geom(name="place_basket_right", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[-(bw + 0.5 * t), 0.0, wz], size=[0.5 * t, bwy + t, wh], rgba=basket_color)
+        basket.add_geom(name="place_basket_front", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, bwy + 0.5 * t, wz], size=[bw, 0.5 * t, wh], rgba=basket_color)
+        basket.add_geom(name="place_basket_back", type=mujoco.mjtGeom.mjGEOM_BOX, pos=[0.0, -(bwy + 0.5 * t), wz], size=[bw, 0.5 * t, wh], rgba=basket_color)
     return arm
+
+
+@dataclass(frozen=True)
+class Conveyor:
+    """A belt running along world y at x = `x` over the work surface: a long thin slab
+    on a slide joint, driven at a set speed by a velocity servo (actuator
+    `conveyor_drive`, ctrl = m/s along +y). Objects ride on it by friction -- nothing
+    moves them but the belt. It does not touch the table or platform under it."""
+
+    x: float = 0.42
+    width: float = 0.10
+    thickness: float = 0.010
+    y_min: float = -1.2      # belt extent along y at the start (it travels with the slab)
+    y_max: float = 3.2
+
+    def top_z(self, surface_z: float) -> float:
+        return surface_z + self.thickness
+
+
+def _add_conveyor(arm: mujoco.MjSpec, conveyor: Conveyor, surface_z: float) -> None:
+    half_length = 0.5 * (conveyor.y_max - conveyor.y_min)
+    belt = arm.worldbody.add_body(
+        name="conveyor_belt",
+        pos=[conveyor.x, 0.5 * (conveyor.y_min + conveyor.y_max), surface_z + 0.5 * conveyor.thickness],
+    )
+    belt.add_joint(name="conveyor_slide", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0.0, 1.0, 0.0], damping=5.0)
+    belt.add_geom(
+        name="conveyor_belt_top", type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=[0.5 * conveyor.width, half_length, 0.5 * conveyor.thickness],
+        mass=20.0, friction=[1.2, 0.005, 0.0001], rgba=[0.18, 0.18, 0.2, 1.0],
+    )
+    # Visual stripes so the motion shows in the viewer (no collision).
+    for index in range(int(2 * half_length / 0.10)):
+        belt.add_geom(
+            name=f"conveyor_stripe_{index}", type=mujoco.mjtGeom.mjGEOM_BOX,
+            pos=[0.0, -half_length + 0.05 + 0.10 * index, 0.5 * conveyor.thickness + 0.0005],
+            size=[0.5 * conveyor.width, 0.004, 0.0005], rgba=[0.45, 0.45, 0.5, 1.0],
+            contype=0, conaffinity=0, group=2,
+        )
+    arm.add_exclude(bodyname1="world", bodyname2="conveyor_belt")
+    arm.add_actuator(
+        name="conveyor_drive", target="conveyor_slide", trntype=mujoco.mjtTrn.mjTRN_JOINT,
+        gaintype=mujoco.mjtGain.mjGAIN_FIXED, gainprm=[400.0] + [0.0] * 9,
+        biastype=mujoco.mjtBias.mjBIAS_AFFINE, biasprm=[0.0, 0.0, -400.0] + [0.0] * 7,
+        ctrlrange=[-0.2, 0.2], ctrllimited=True, forcerange=[-200.0, 200.0], forcelimited=True,
+    )
+
+
+def _add_object(
+    arm: mujoco.MjSpec, placement: Placement, surface_z: float, *,
+    body: str, joint: str, collision: str, visual: str,
+) -> None:
+    """One free-floating YCB object resting on the surface at `surface_z`.
+
+    Collision: the can keeps its analytic cylinder (the trials are calibrated on
+    it, and cylinder-plane contact is steadier than a mesh hull); every other object
+    collides as the convex hull of its own OBJ. The textured mesh is drawn on top,
+    no collision. Body frame = OBJ frame (see simulation.objects)."""
+    spec = placement.spec
+    mesh_name = f"{body}_mesh"
+    arm.add_mesh(name=mesh_name, file=str(spec.mesh_file), inertia=mujoco.mjtMeshInertia.mjMESH_INERTIA_CONVEX)
+    material = None
+    if spec.texture_file.is_file():
+        texture = f"{body}_texture"
+        material = f"{body}_material"
+        arm.add_texture(name=texture, type=mujoco.mjtTexture.mjTEXTURE_2D, file=str(spec.texture_file))
+        # textures slot 1 = diffuse map (the XML `texture=` attribute).
+        arm.add_material(
+            name=material, textures=["", texture, "", "", "", "", "", "", "", ""],
+            rgba=[1.0, 1.0, 1.0, 1.0], specular=0.3, shininess=0.2,
+        )
+    x, y = spawn_origin_xy(placement)
+    obj = arm.worldbody.add_body(
+        name=body, pos=[float(x), float(y), surface_z + spawn_height(placement)],
+        quat=spawn_quat(placement).tolist(),
+    )
+    obj.add_freejoint(name=joint)
+    if spec.collision == "cylinder":
+        radius, half_height = spec.cylinder
+        obj.add_geom(
+            name=collision, type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[radius, half_height, 0.0],
+            pos=list(spec.collision_offset),
+            mass=spec.mass, friction=list(spec.friction), rgba=[0.0, 0.0, 0.0, 0.0],
+        )
+    else:
+        obj.add_geom(
+            name=collision, type=mujoco.mjtGeom.mjGEOM_MESH, meshname=mesh_name,
+            mass=spec.mass, friction=list(spec.friction), rgba=[0.0, 0.0, 0.0, 0.0],
+        )
+    # With a texture the rgba must be white: MuJoCo multiplies it into the texture.
+    visual_kwargs = dict(
+        name=visual, type=mujoco.mjtGeom.mjGEOM_MESH, meshname=mesh_name, pos=list(spec.visual_offset),
+        mass=0.0, rgba=[1.0, 1.0, 1.0, 1.0] if material else [0.80, 0.16, 0.12, 1.0],
+        contype=0, conaffinity=0, group=2,
+    )
+    if material:
+        visual_kwargs["material"] = material
+    obj.add_geom(**visual_kwargs)
 
 
 def build_five_finger_model(
@@ -496,12 +568,18 @@ def build_five_finger_model(
     arm_half_separation: float | None = None, left_arm_mount_yaw_deg: float | None = None,
     right_arm_mount_yaw_deg: float | None = None, basket_stand_height: float = 0.0,
     basket_floor_tilt_deg: float = 0.0, work_platform_height: float = 0.0,
+    pick_object: str = "can", pick_pose: str = "upright", pick_yaw_deg: float = 0.0,
+    extra_objects: Sequence[Placement] = (),
+    conveyor: "Conveyor | None" = None,
+    basket_half_size: tuple[float, float] | None = None, basket_wall_height: float | None = None,
 ) -> mujoco.MjModel:
     model = build_five_finger_spec(
         pick_bottle=pick_bottle, pick_position=pick_position, basket_position=basket_position,
         arm_half_separation=arm_half_separation, left_arm_mount_yaw_deg=left_arm_mount_yaw_deg,
         right_arm_mount_yaw_deg=right_arm_mount_yaw_deg, basket_stand_height=basket_stand_height,
         basket_floor_tilt_deg=basket_floor_tilt_deg, work_platform_height=work_platform_height,
+        pick_object=pick_object, pick_pose=pick_pose, pick_yaw_deg=pick_yaw_deg, extra_objects=extra_objects,
+        conveyor=conveyor, basket_half_size=basket_half_size, basket_wall_height=basket_wall_height,
     ).compile()
     _stiffen_arm_actuators(model)
     _soften_hand_actuators(model)

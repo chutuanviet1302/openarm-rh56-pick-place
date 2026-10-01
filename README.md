@@ -1,10 +1,65 @@
 # OpenArm + Inspire Hand + D435 Pick & Place
 
+![Bàn + băng chuyền: 6/6 vật vào rổ, 196 s mô phỏng (x10)](docs/bin_conveyor_x10.gif)
+
+*Task bàn + băng chuyền trong MuJoCo: FoundationPose 6D, grasp library, mink QP, 2 tay — 6/6 vật vào rổ trong 196 s (phát x10). Tạo lại: `python -m scripts.make_replay_gif artifacts/bin_conveyor_mink_frames.npz --speed 10`. Báo cáo tuần: [docs/BAO_CAO_TIEN_DO_2026-10-02.pdf](docs/BAO_CAO_TIEN_DO_2026-10-02.pdf).*
+
 Pipeline ROS 2 theo thiết kế của mentor:
 
 `D435 RGB-D → /perception/object_pose (PoseStamped) → TF camera/base → MoveIt IK theo waypoint → FollowJointTrajectory 7-DOF → ros2_control`
 
 Inspire RH56DFX nhận `custom_ros_messages/MotorCmds` qua `/hands/cmd`, đúng thứ tự driver `right[6] + left[6]`. Giá trị `open`/`grasp` trong `config.json` dùng thang raw 0–1000 của RH56.
+
+## PickCell: cell robot soạn đơn (digital twin MuJoCo)
+
+**Vấn đề:** ở kho thương mại điện tử / siêu thị, nhân viên soạn đơn phải nhặt đúng mặt hàng, đúng số lượng,
+từ khay trên bàn và từ băng chuyền đang chạy, rồi bỏ vào thùng của đơn. Công việc lặp lại, dễ soạn sai,
+thiếu người giờ cao điểm. **PickCell** là một cell hai tay OpenArm + Inspire RH56 + camera D435 làm việc đó:
+
+```
+đơn hàng (JSON / web) → camera RGB-D: nhận dạng + tracking mọi vật trên bàn và băng
+  → chỉ chọn món đơn còn thiếu → ước lượng pose (gt | FoundationPose) → grasp library
+  → kế hoạch + chuyển động liền mạch có kiểm va chạm → gắp (trên băng: chặn đầu, đi theo băng)
+  → thả vào thùng → kiểm tra đủ đơn → KPI + dashboard + replay
+```
+
+Món không thuộc đơn được để nguyên trên bàn, hoặc cho trôi qua trên băng. Pha băng tự dừng khi đơn đã đủ.
+Món không có hàng trong cell được báo **thiếu hàng**, không tính là lỗi robot.
+
+```powershell
+# Một đơn từ dòng lệnh (bố cục cố định, pose gt); kết quả ở runs/<đơn>_<thời điểm>/
+.\.venv-lerobot\Scripts\python.exe -m product.cell --order orders\demo_001.json
+# Web app: đặt đơn, xem tiến độ, mở dashboard, replay 3D -> http://localhost:8010
+.\.venv-lerobot\Scripts\python.exe -m product.server
+# Replay 3D một lần chạy (cửa sổ MuJoCo, có hộp detection + pose 6D)
+.\.venv-lerobot\Scripts\python.exe -m product.cell --replay runs\<đơn>_<thời điểm> --quality fast
+```
+
+Mỗi lần chạy ghi ra:
+- `order_result.json`: từng dòng đơn (yêu cầu / trong thùng / thiếu), mispick, trạng thái.
+- `metrics.json`: va chạm theo loại, biên khớp, jerk, số lần dừng, tính lại offline từ recording.
+- `kpi.json`: mỗi số kèm nguồn.
+- `dashboard.html` + `replay.gif` + `detections.png`.
+
+Danh sách các lần chạy: `runs/index.html`.
+
+Kết quả 3 đơn mẫu (1 lần chạy mỗi đơn, bố cục cố định, pose `gt`, 01/10/2026; số lấy nguyên từ `runs/<đơn>/kpi.json`):
+
+| Đơn | Yêu cầu | Trạng thái | Món trong thùng | Mispick | Lượt hỏng | Sim (s) | Wall (s) | Frame có va chạm | Biên khớp min (°) |
+|---|---|---|---|---|---|---|---|---|---|
+| `demo_001` | apple x1, can x1 | Đủ đơn | 2/2 | 0 | 0 | 47 | 125 | 0 | 5.75 |
+| `demo_002` | can x2, orange x1 | Đủ đơn | 3/3 | 0 | 0 | 112 | 214 | 0 | 5.75 |
+| `demo_003` | peach x1, pear x1 | Thiếu hàng | 1/2 | 0 | 0 | 175 | 221 | 0 | 3.62 |
+
+`demo_003` thiếu `pear` vì cell không có hàng đó: cell chờ trên băng tối đa 150 s rồi báo thiếu, không gắp nhầm món khác.
+Va chạm đếm mọi frame có bàn tay/cánh tay xuyên vào bàn, băng, thùng, thân robot, tay kia hoặc món hàng khác (`scripts/task_metrics.py`).
+
+
+Giới hạn:
+- Chỉ trong mô phỏng.
+- Cell chạy một đơn một lúc (một lần chạy ~4 GB RAM trên laptop thử nghiệm).
+- Bước "kiểm tra thùng" đọc trạng thái simulator, đóng vai camera kiểm tra thùng chưa có.
+- Thời gian là thời gian mô phỏng; robot thật cần đo lại.
 
 ## Chạy ROS 2
 

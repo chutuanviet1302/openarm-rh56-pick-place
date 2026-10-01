@@ -50,6 +50,9 @@ class Plan:
     # the grasp itself (the planner's `orientation` is the lifted, turned one).
     lift_twist_deg: float = 0.0
     grasp_orientation: np.ndarray | None = None
+    # Grasp-library heading grasps: how far the jaw runs off square to the object's
+    # axis (GraspPlanner._yaw_candidates).
+    jaw_offset_deg: float = 0.0
     # Hand orientation per phase where it differs from the planner's `orientation`
     # (twist-lift: the grasp and the part-turned standoff).
     phase_orientations: dict[str, np.ndarray] = field(default_factory=dict)
@@ -79,6 +82,13 @@ class GraspPlanner:
         # Oblique tilt of the heading being planned (None = reference grasp).
         self.grasp_tilt: tuple[str, float] | None = None
         self._local_jaw: tuple[np.ndarray, np.ndarray] | None = None
+        self._local_jaw_fraction: float | None = None
+        # Object width across the jaw for the heading being planned (off-square grasps
+        # of a cylinder span more than its diameter); None = scene.object_extents().
+        self.jaw_width: float | None = None
+        # Largest jaw offset off square-on to try (None: all of GRASP_JAW_OFFSETS_DEG).
+        # Demo tries square-on grasps at every drop spot before any offset one.
+        self.max_jaw_offset_deg: float | None = None
 
     # ------------------------------------------------------------------ hand geometry
     def local_jaw_offsets(self) -> tuple[np.ndarray, np.ndarray]:
@@ -88,8 +98,10 @@ class GraspPlanner:
         Measured once by forward kinematics on a throwaway MjData, so the targets follow
         from where this particular hand's jaws actually end up.
         """
-        if self._local_jaw is None:
+        fraction = self.scene.grasp_closure_fraction
+        if self._local_jaw is None or self._local_jaw_fraction != fraction:
             self._local_jaw = self.scene.jaw_offsets_at(self.side)
+            self._local_jaw_fraction = fraction
         return self._local_jaw
 
     def jaw_offsets(self, orientation: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -118,6 +130,8 @@ class GraspPlanner:
         scene = self.scene
         bottle = np.asarray(object_position, dtype=float)
         width, height = scene.object_extents()
+        if self.jaw_width is not None:
+            width = self.jaw_width
         offset, thumb_offset = self.jaw_offsets(self.orientation)
 
         # Straddle the object with the jaw centred on it in all three axes.
@@ -131,6 +145,9 @@ class GraspPlanner:
         # oblique grasps use their own values.
         oblique = self.grasp_tilt is not None
         height_bias = C.OBLIQUE_GRASP_HEIGHT_BIAS if oblique else C.GRASP_HEIGHT_BIAS
+        target = scene.grasp_target
+        if target is not None and target.entry.height_bias is not None:
+            height_bias = target.entry.height_bias
         finger_bias = C.OBLIQUE_JAW_BIAS_TOWARD_FINGERS if oblique else C.JAW_BIAS_TOWARD_FINGERS[self.side]
         grasp = (
             bottle
@@ -222,28 +239,46 @@ class GraspPlanner:
         headings (_grasp_tilts) are tried only after every reference heading failed.
         """
         failures = [f"grasp heading key {key:+.0f}: failed in physics, not retried" for key in exclude_yaws_deg]
-        for tilt_index, tilt in self._grasp_tilts():
-            for yaw in C.GRASP_YAW_CANDIDATES_DEG:
-                # Key of this heading for exclude_yaws_deg: the yaw itself for the
-                # reference (untilted) grasp, so existing callers are unchanged.
-                key = yaw + 1000.0 * tilt_index
-                if key in exclude_yaws_deg:
-                    continue
-                label = f"grasp yaw {yaw:+.0f}" + (f" tilt {tilt[0]}{tilt[1]:+.0f}" if tilt else "")
-                self.orientation = rotation_z(yaw) @ self._tilted(tilt)
-                self.grasp_tilt = tilt
+        # Every tilt's square-on headings before any off-square one (stable sort: with
+        # no grasp-library heading every offset is 0 and the order is unchanged).
+        candidates = sorted(
+            ((tilt_index, tilt, yaw, jaw_offset) for tilt_index, tilt in self._grasp_tilts()
+             for yaw, jaw_offset in self._yaw_candidates(tilt)),
+            key=lambda item: abs(item[3]),
+        )
+        target = self.scene.grasp_target
+        for tilt_index, tilt, yaw, jaw_offset in candidates:
+            # Key of this heading for exclude_yaws_deg: the yaw itself for the
+            # reference (untilted) grasp, so existing callers are unchanged.
+            key = yaw + 1000.0 * tilt_index
+            if key in exclude_yaws_deg:
+                continue
+            label = f"grasp yaw {yaw:+.0f}" + (f" tilt {tilt[0]}{tilt[1]:+.0f}" if tilt else "")
+            if jaw_offset:
+                label += f" jaw {jaw_offset:+.0f} off square"
+            self.orientation = rotation_z(yaw) @ self._tilted(tilt)
+            self.grasp_tilt = tilt
+            self.jaw_width = None
+            if target is not None:
+                self.jaw_width = target.entry.width / np.cos(np.radians(jaw_offset))
                 try:
-                    plan = self._plan_pick(object_position)
+                    self.scene.fit_closure_fraction(self.jaw_width, self.side)
                 except RuntimeError as error:
                     failures.append(f"{label}: {error}")
                     continue
-                plan.grasp_yaw_deg, plan.grasp_key, plan.grasp_tilt = yaw, key, tilt
-                try:
-                    self.plan_place(plan, object_position, place_floor=place_floor)
-                except RuntimeError as error:
-                    failures.append(f"{label}: {error}")
-                    continue
-                return plan
+            try:
+                plan = self._plan_pick(object_position)
+            except RuntimeError as error:
+                failures.append(f"{label}: {error}")
+                continue
+            plan.grasp_yaw_deg, plan.grasp_key, plan.grasp_tilt = yaw, key, tilt
+            plan.jaw_offset_deg = float(jaw_offset)
+            try:
+                self.plan_place(plan, object_position, place_floor=place_floor)
+            except RuntimeError as error:
+                failures.append(f"{label}: {error}")
+                continue
+            return plan
         self.orientation = self.base_orientation
         self.grasp_tilt = None
         raise RuntimeError("no reachable grasp at any hand yaw:\n  " + "\n  ".join(failures))
@@ -274,6 +309,31 @@ class GraspPlanner:
             return oblique + [(0, None)]
         return [(0, None)] + oblique
 
+    def _yaw_candidates(self, tilt: tuple[str, float] | None) -> list[tuple[float, float]]:
+        """(hand yaw, jaw offset off square) pairs to try for one grasp tilt.
+
+        Round seen from above (no grasp target, or the library gives no jaw heading):
+        C.GRASP_YAW_CANDIDATES_DEG as always, offset 0. Otherwise the jaw must cross
+        the library's axis (a lying can's, a pear's long axis): the yaw that turns
+        this tilt's jaw line onto the square-on heading, that yaw + 180 (the object is
+        just as graspable from its other side), each shifted by
+        C.GRASP_JAW_OFFSETS_DEG; per offset, smallest turn from the reference first."""
+        target = self.scene.grasp_target
+        if target is None or target.jaw_heading_deg is None:
+            return [(yaw, 0.0) for yaw in C.GRASP_YAW_CANDIDATES_DEG]
+        fingers, thumb = self.jaw_offsets(self._tilted(tilt))
+        line = thumb - fingers
+        current = float(np.degrees(np.arctan2(line[1], line[0])))
+        pairs = {}
+        offsets = target.entry.jaw_offsets_deg or C.GRASP_JAW_OFFSETS_DEG
+        for base in (target.jaw_heading_deg - current, target.jaw_heading_deg - current + 180.0):
+            for offset in offsets:
+                yaw = round((base + offset + 180.0) % 360.0 - 180.0, 1)
+                pairs.setdefault(yaw, offset)
+        if self.max_jaw_offset_deg is not None:
+            pairs = {yaw: offset for yaw, offset in pairs.items() if abs(offset) <= self.max_jaw_offset_deg}
+        return sorted(pairs.items(), key=lambda item: (abs(item[1]), abs(item[0])))
+
     def _tilted(self, tilt: tuple[str, float] | None) -> np.ndarray:
         if tilt is None:
             return self.base_orientation
@@ -287,7 +347,7 @@ class GraspPlanner:
         """Plan only through proof-lift; used by the bimanual route preflight."""
         failures = []
         self.grasp_tilt = None
-        for yaw in C.GRASP_YAW_CANDIDATES_DEG:
+        for yaw, _ in self._yaw_candidates(None):
             self.orientation = rotation_z(yaw) @ self.base_orientation
             try:
                 plan = self._plan_pick(object_position)
@@ -318,7 +378,7 @@ class GraspPlanner:
         Returns (joints, centre); raises RuntimeError when nothing is clear."""
         hanging = self.scene.wrist_position_at(self.side, self.scene.attention_pose[self.side])
         attention = self.scene.attention_pose[self.side]
-        obstacles = self.scene.basket_geoms | {self.scene.object_geom} | self.scene.table_geoms
+        obstacles = self.scene.basket_geoms | {self.scene.object_geom} | self.scene.table_geoms | self.scene.other_object_geoms()
         failures = []
         # Same fallback idea as Demo's centring retry (demo.py): a chain seed can sit
         # in a narrow IK basin even when the target is solvable from the reference
@@ -508,11 +568,19 @@ class GraspPlanner:
         # Also checked against the basket (and its stand): a pick that starts *inside*
         # the basket (retrieval, simulation/pick_place/retrieve.py) must clear its
         # walls on the way in. For every other pick the basket sits far away.
-        obstacles = self.scene.table_geoms | self.scene.basket_geoms
+        obstacles = self.scene.table_geoms | self.scene.basket_geoms | self.scene.other_object_geoms()
         for phase in ("pregrasp", "grasp"):
             hits = self.hand_contacts(joints[phase], obstacles)
             if hits:
                 raise RuntimeError(f"{phase} hand would hit an obstacle ({', '.join(sorted(hits))})")
+        # Grasp-library objects: the palm must not sit in the object at the grasp. On a
+        # tall object (191 mm mustard bottle) the palm of a top grasp came down on the
+        # cap and tipped the bottle 16 deg before the fingers closed (2026-09-28).
+        if self.scene.grasp_target is not None:
+            for phase in ("pregrasp", "grasp"):
+                depth = self.palm_in_object(joints[phase])
+                if depth is not None:
+                    raise RuntimeError(f"{phase} palm would press {depth*1000:.0f}mm into the object")
         clearance = self.fingertip_floor_clearance(joints["grasp"])
         if clearance < C.MIN_FLOOR_CLEARANCE:
             raise RuntimeError(f"grasp fingertip floor clearance only {clearance*1000:.1f}mm")
@@ -547,7 +615,7 @@ class GraspPlanner:
         pivot = np.array([object_position[0], object_position[1], grasp_center[2]])
         rise = max(float(centers["lift"][2] - grasp_center[2]) + C.TWIST_LIFT_EXTRA_RISE, C.APPROACH_STANDOFF)
         steps = C.TWIST_LIFT_STEPS
-        obstacles = self.scene.table_geoms | self.scene.basket_geoms
+        obstacles = self.scene.table_geoms | self.scene.basket_geoms | self.scene.other_object_geoms()
         base = self.orientation
         for twist in C.TWIST_LIFT_CANDIDATES_DEG:
             path, targets, seed = [], [], joints["grasp"]
@@ -775,7 +843,11 @@ class GraspPlanner:
         """Throwaway MjData with the active arm at `arm_joints` and the hand pre-shaped
         (thumb opposed, fingers part-closed) or, with `closed`, a fist as at attention."""
         scene, model = self.scene, self.check_model
-        data = mujoco.MjData(model)
+        # One scratch MjData per planner, overwritten each call (every caller reads it
+        # at once): allocating one per check was ~27% of a hand_contacts call.
+        data = self.__dict__.get("_scratch")
+        if data is None:
+            data = self._scratch = mujoco.MjData(model)
         data.qpos[:] = scene.data.qpos
         side = self.side
         data.qpos[scene.arm_qpos[side]] = arm_joints
@@ -785,7 +857,7 @@ class GraspPlanner:
             for name, actuator in scene.finger_actuator[side].items():
                 joint = model.actuator_trnid[actuator, 0]
                 opened, closed_value = scene.open_ctrl[side][name], scene.closed_ctrl[side][name]
-                data.qpos[model.jnt_qposadr[joint]] = opened + C.GRASP_CLOSURE_FRACTION * (closed_value - opened)
+                data.qpos[model.jnt_qposadr[joint]] = opened + scene.grasp_closure_fraction * (closed_value - opened)
             yaw_actuator, _, opposed = scene.thumb_yaw[side]
             data.qpos[model.jnt_qposadr[model.actuator_trnid[yaw_actuator, 0]]] = opposed
         # Poses and contacts are all the callers read; skip the dynamics.
@@ -809,6 +881,22 @@ class GraspPlanner:
                 hits.add(model.body(int(model.geom_bodyid[other])).name)
         return hits
 
+    def palm_in_object(self, arm_joints: np.ndarray) -> float | None:
+        """Deepest penetration (m) of the active hand's non-finger bodies (palm, base)
+        into the pick object with the hand pre-shaped at `arm_joints`, or None."""
+        scene = self.scene
+        data = self._pregrasp_data(arm_joints)
+        deepest = None
+        for contact in data.contact[: data.ncon]:
+            if scene.object_geom not in (contact.geom1, contact.geom2):
+                continue
+            other = contact.geom2 if contact.geom1 == scene.object_geom else contact.geom1
+            if scene.hand_side(other) != self.side or scene.finger_of(other, self.side) is not None:
+                continue
+            if float(contact.dist) < 0.0:
+                deepest = max(deepest or 0.0, -float(contact.dist))
+        return deepest
+
     def blend_contacts(self, start: np.ndarray, end: np.ndarray, target_geoms: set[int], samples: int = 40) -> set[str]:
         """Fist bodies that intersect `target_geoms` anywhere along a straight joint-space
         blend from `start` to `end` (what Executor.move_to executes; the hand stays a
@@ -831,7 +919,7 @@ class GraspPlanner:
         end_pos, _ = wrist_frame(self.model, self.side, first_waypoint)
         if float(np.linalg.norm(end_pos - start_pos)) > C.BRANCH_BLEND_MAX_CARTESIAN_M:
             return None
-        obstacles = self.scene.table_geoms | self.scene.basket_geoms
+        obstacles = self.scene.table_geoms | self.scene.basket_geoms | self.scene.other_object_geoms()
         for fraction in np.linspace(0.0, 1.0, samples + 1)[1:]:
             joints = start_joints + (first_waypoint - start_joints) * fraction
             margin = self.joint_margin_degrees(joints)

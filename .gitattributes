@@ -1,0 +1,4 @@
+
+# Scripts run by bash inside WSL: keep LF line endings on every checkout.
+*.sh text eol=lf
+wsl/* text eol=lf

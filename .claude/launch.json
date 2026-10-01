@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "scripts.serve_viewer", "--port", "8000", "--no-browser"],
       "port": 8000
+    },
+    {
+      "name": "pickcell",
+      "runtimeExecutable": ".venv-lerobot/Scripts/python.exe",
+      "runtimeArgs": ["-m", "product.server", "--port", "8010", "--no-browser"],
+      "port": 8010
     }
   ]
 }

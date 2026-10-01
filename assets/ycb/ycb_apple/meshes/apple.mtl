@@ -1,0 +1,4 @@
+newmtl material_0
+Ka 1 1 1
+Kd 1 1 1
+map_Kd ../textures/apple.png

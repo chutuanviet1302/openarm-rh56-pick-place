@@ -16,7 +16,6 @@ from simulation.five_finger_model import BASKET_HALF_WIDTH, BASKET_POSITION_B, B
 from simulation.pick_place import config as C
 from simulation.pick_place.episode import EpisodeLog, TrialResult
 from simulation.pick_place.executor import Executor
-from simulation.pick_place.kinematics import upright_tilt_degrees
 from simulation.pick_place.planner import GraspPlanner, Plan
 from simulation.pick_place.scene import Scene
 from simulation.vision_detector import VisionDetector
@@ -40,7 +39,18 @@ class Demo:
         side: str = "right",
         scene: Scene | None = None,
         place_offset: tuple[float, float] | None = None,
+        pose_backend: str | None = None,
+        release: str = "set_down",
+        detection_mask: np.ndarray | None = None,
+        mask_source=None,
+        stay_over_basket: bool = False,
+        start_over_basket: bool = False,
+        motion: str = "waypoints",
+        place_candidates: list[tuple[float, float]] | None = None,
     ) -> None:
+        """`pose_backend` ('gt', 'color', 'foundationpose'; pose_source.py): perceive
+        the object's full 6D pose and take it as the grasp library says for that pose.
+        None keeps the original position-only can pipeline (`perception` flag)."""
         if side not in ("left", "right"):
             raise ValueError("side must be 'left' or 'right'")
         self.side = side
@@ -57,6 +67,9 @@ class Demo:
         # where the task puts it; this only moves where inside it the can is set down
         # (retrieve.py: toward the side the other arm can grasp from).
         self.place_offset = None if place_offset is None else np.array([*place_offset, 0.0], dtype=float)
+        # Drop spots to try in order (best first) when `place_offset` is not given: the
+        # first one the planner can reach is used (layout.drop_spot_candidates).
+        self.place_candidates = [np.array([*c, 0.0], dtype=float) for c in (place_candidates or [])]
         self.log = EpisodeLog(lambda: self.scene.data.time, verbose=verbose)
         # With perception on, the object's position comes from the camera (RGB-D ->
         # deprojection), never from the simulator state; the error against ground truth
@@ -65,6 +78,35 @@ class Demo:
         self.perception_camera = perception_camera
         self.perceived_position: np.ndarray | None = None
         self.perception_error_m: float | None = None
+        self.pose_backend = pose_backend
+        self.perceived_pose: np.ndarray | None = None
+        self.grasp_options: list = []
+        # Physically rejected grasps let go of and retried with another heading.
+        self.grasp_retries = C.GRASP_RETRIES
+        # "set_down": lower until the object rests on the basket floor (the can
+        # pipeline); "drop": let go just above the rim (table clearing: the basket may
+        # already hold other objects, the object need not stand).
+        if release not in ("set_down", "drop"):
+            raise ValueError("release must be 'set_down' or 'drop'")
+        self.release = release
+        # Object pixels from the detector (object_detector.py), handed to a 6D backend
+        # that needs a mask (FoundationPose) instead of the simulator's segmentation.
+        self.detection_mask = detection_mask
+        # mask_source() -> the object's pixels from a fresh look: every perceive (a
+        # retry included) uses a current mask; a failed grasp moves the object, and a
+        # stale mask put FoundationPose 92 mm off, below the table (bin task, peach).
+        self.mask_source = mask_source
+        # Chained picks: stay_over_basket ends the episode at the carry pose above the
+        # basket instead of going back to attention (return_home() does that later);
+        # start_over_basket starts the next episode from that pose.
+        self.stay_over_basket = stay_over_basket
+        self.start_over_basket = start_over_basket
+        # "mink": the empty-hand move of a drop task to the next object's hover is
+        # solved by mink's QP with table/box/object clearance as constraints
+        # (mink_motion.py); "waypoints": the planner's joint blends, as before.
+        if motion not in ("waypoints", "mink"):
+            raise ValueError("motion must be 'waypoints' or 'mink'")
+        self.motion = motion if release == "drop" else "waypoints"
         self.plan: Plan | None = None
         self.light_grip_ctrl: np.ndarray | None = None
         self.failed_grasp_yaws: list[float] = []
@@ -96,7 +138,12 @@ class Demo:
 
     # ------------------------------------------------------------------ perception
     def object_position(self) -> np.ndarray:
-        """Where the planner believes the object is."""
+        """Where the planner believes the object is (with a pose backend: the grasp
+        library's grasp centre on the perceived pose)."""
+        if self.pose_backend is not None:
+            if self.scene.grasp_target is None:
+                self.perceive_pose()
+            return self.scene.grasp_target.center_world.copy()
         if self.perception:
             if self.perceived_position is None:
                 self.perceive_object()
@@ -119,6 +166,57 @@ class Demo:
         self.log.record("perceived_position", self.perceived_position)
         self.log.record("perception_error_m", self.perception_error_m)
         return self.perceived_position
+
+    def perceive_pose(self) -> np.ndarray:
+        """6D pose from `pose_backend`, then the grasp library entry for it. The error
+        against ground truth is logged (symmetry-aware), never used."""
+        from simulation.objects import OBJECTS
+        from simulation.pick_place.grasp_library import select_grasps
+        from simulation.pick_place.pose_source import get_object_pose, pose_error
+
+        scene = self.scene
+        mask = self.mask_source() if self.mask_source is not None else self.detection_mask
+        pose = get_object_pose(scene, scene.pick_object, self.pose_backend, self.perception_camera, mask=mask)
+        pose = _upright_axial(scene.pick_type, pose)
+        self._check_pose_plausible(pose)
+        spec = OBJECTS[scene.pick_type]
+        translation, rotation = pose_error(pose, scene.object_pose(), spec.symmetry, _keep_axis(scene.pick_type, pose))
+        # Where the object will be when the hand gets there (a moving object:
+        # ConveyorDemo); the grasp is planned for that pose.
+        pose = self.planning_pose(pose)
+        self.grasp_options = select_grasps(scene.pick_type, pose)
+        target = self.grasp_options[0]
+        scene.set_grasp_target(target, self.side)
+        self.perceived_pose = pose
+        self.perceived_position = pose[:3, 3].copy()
+        self.perception_error_m = translation
+        self.log.record("perceived_pose", pose)
+        self.log.record("perceived_position", self.perceived_position)
+        self.log.record("perception_error_m", translation)
+        self.log.record("pose_rotation_error_deg", rotation)
+        self.log.record("grasp_name", target.name)
+        self.log.record("grasp_closure_fraction", scene.grasp_closure_fraction)
+        return pose
+
+    POSE_SURFACE_TOLERANCE_M = 0.02
+
+    def _check_pose_plausible(self, pose: np.ndarray) -> None:
+        """An object on the table rests on it: its lowest point within
+        POSE_SURFACE_TOLERANCE_M of the work surface. A pose that sinks it into the
+        table or floats it is a perception failure, not something to plan a grasp for."""
+        from simulation.objects import collision_points
+
+        scene = self.scene
+        lowest = float((collision_points(scene.pick_type) @ pose[:3, :3].T + pose[:3, 3])[:, 2].min())
+        gap = lowest - scene.work_surface_z
+        if abs(gap) > self.POSE_SURFACE_TOLERANCE_M:
+            raise RuntimeError(f"perception failed: implausible {scene.pick_object} pose "
+                               f"(lowest point {gap * 1000:+.0f} mm from the table)")
+
+    def planning_pose(self, observed: np.ndarray) -> np.ndarray:
+        """The pose to plan the grasp for, from the one just observed: the same for a
+        still object; ConveyorDemo moves it on to where the belt will have taken it."""
+        return observed
 
     # ------------------------------------------------------------------ grasp checks
     def fingers_not_pressing(self) -> list[str]:
@@ -146,6 +244,17 @@ class Demo:
 
     # ------------------------------------------------------------------ phases
     def phase_perceive(self) -> None:
+        if self.pose_backend is not None:
+            self.perceive_pose()
+            target = self.scene.grasp_target
+            heading = "any" if target.jaw_heading_deg is None else f"{target.jaw_heading_deg:.0f}deg"
+            self.log.note(
+                f"{self.scene.pick_object} pose from '{self.pose_backend}': "
+                f"{np.round(self.perceived_position, 3).tolist()} (error {self.perception_error_m*1000:.1f}mm, "
+                f"{self.log.values['pose_rotation_error_deg']:.1f}deg) -> grasp '{target.name}', jaw heading {heading}, "
+                f"pre-shape {self.scene.grasp_closure_fraction:.2f}"
+            )
+            return
         if not self.perception:
             self.log.note("perception off: planning from the simulator's object pose")
             return
@@ -185,6 +294,13 @@ class Demo:
         (2026-09-24). Falls back to the planned joint-space move if the line has no IK."""
         ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
         arm = f"{side}_arm"
+        if self.release == "drop":
+            # Lift high enough for the object as it actually hangs in the hand: a far
+            # pick sags the servos and settles the object lower than planned (apple
+            # 3.3cm, peach -8cm over the rim for a 5cm rule).
+            needed = scene.carry_bottom_z() + C.DROP_CARRY_MARGIN - scene.object_bottom_z()
+            wrist_z = float(scene.wrist_position(side)[2])
+            plan.centers["lift"][2] = max(float(plan.centers["lift"][2]), wrist_z + needed)
         if plan.lift_twist_deg:
             ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
             return
@@ -210,20 +326,70 @@ class Demo:
             self.resolve_lift_from_here()
             ex.move_to({arm: plan["lift"]}, C.MOVE_TO_LIFT)
             return
-        ex.follow({arm: path}, [C.MOVE_TO_LIFT / len(path)] * len(path))
+        ex.follow_path({arm: path}, C.MOVE_TO_LIFT)
         plan.joints["lift"] = path[-1]
         plan.centers["lift"] = target
 
     def place_floor(self) -> np.ndarray | None:
+        """The surface the object is set down on (its bottom), for the planner. A drop
+        is planned to end with the object's bottom DROP_ABOVE_RIM over the rim -- the
+        hand never goes into the box, so no box wall constrains the plan (planned all
+        the way to the floor, a narrow box rejected grasps that the drop never needed)."""
+        if self.release == "drop":
+            floor = self.scene.basket_floor() + (self.place_offset if self.place_offset is not None else 0.0)
+            floor[2] = self.scene.basket_rim_z() + C.DROP_ABOVE_RIM - C.PLACE_DROP_HEIGHT
+            return floor
         return None if self.place_offset is None else self.scene.basket_floor() + self.place_offset
 
     def phase_plan(self) -> None:
-        self.plan = self.executor.think(
-            self.planner.plan, self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws), place_floor=self.place_floor()
-        )
+        if self.place_candidates:
+            # Grasp quality before drop preference: a square-on grasp at any drop spot
+            # before an off-square one at the first (an off-square lying-can grip,
+            # planned for the preferred spot, slipped 49 mm on the proof lift twice,
+            # 2026-10-01). Then every offset the library allows. Re-run on a grasp
+            # retry too: the spot is chosen again with the failed heading excluded.
+            failures = []
+            planned = False
+            for limit in (0.0, None):
+                self.planner.max_jaw_offset_deg = limit
+                for spot in self.place_candidates:
+                    self.place_offset = spot
+                    try:
+                        self._plan_once()
+                    except RuntimeError as error:
+                        square = " square-on" if limit == 0.0 else ""
+                        failures.append(f"spot {np.round(spot[:2], 3).tolist()}{square}: {str(error).splitlines()[0]}")
+                        continue
+                    planned = True
+                    break
+                if planned:
+                    break
+            self.planner.max_jaw_offset_deg = None
+            if not planned:
+                self.place_offset = None
+                raise RuntimeError("no drop spot plans:\n  " + "\n  ".join(failures))
+            if failures:
+                self.log.note(f"drop spot {np.round(self.place_offset[:2], 3).tolist()} after {len(failures)} unplannable tries")
+        else:
+            self._plan_once()
+        self._log_plan()
+
+    def _plan_once(self) -> None:
+        if self.pose_backend is not None and len(self.grasp_options) > 1:
+            self._plan_library_grasps()
+        else:
+            self.plan = self.executor.think(
+                self.planner.plan, self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws), place_floor=self.place_floor()
+            )
+
+    def _log_plan(self) -> None:
         self.log.record("grasp_yaw_deg", float(self.plan.grasp_yaw_deg))
         self.log.record("place_yaw_deg", float(self.plan.place_yaw_deg))
         self.log.record("route_strategy", self.plan.route_strategy)
+        self.log.record("jaw_offset_deg", float(self.plan.jaw_offset_deg))
+        if self.plan.jaw_offset_deg:
+            self.log.note(f"jaw runs {self.plan.jaw_offset_deg:+.0f}deg off square to the object's axis "
+                          f"(pre-shape {self.scene.grasp_closure_fraction:.2f})")
         self.log.record(
             "min_joint_margin_deg",
             min(self.planner.joint_margin_degrees(joints) for joints in self.plan.joints.values()),
@@ -234,13 +400,114 @@ class Demo:
         if self.log.verbose:
             print(self.planner.describe(self.plan))
 
+    def _plan_library_grasps(self) -> None:
+        """Plan the grasp library's options for the perceived pose in order (preferred
+        first); the first with a reachable heading wins."""
+        failures = []
+        for target in self.grasp_options:
+            self.scene.set_grasp_target(target, self.side)
+            try:
+                self.plan = self.executor.think(
+                    self.planner.plan, self.object_position(), exclude_yaws_deg=tuple(self.failed_grasp_yaws),
+                    place_floor=self.place_floor(),
+                )
+            except RuntimeError as error:
+                failures.append(f"{target.name}: {str(error).splitlines()[0]}")
+                continue
+            self.log.record("grasp_name", target.name)
+            if failures:
+                self.log.note(f"grasp '{target.name}' planned after: " + "; ".join(failures))
+            return
+        raise RuntimeError("no grasp in the library plans:\n  " + "\n  ".join(failures))
+
     def phase_ready(self) -> None:
         ex, plan = self.executor, self.plan
-        ex.hold(C.SETTLE_AT_START)
         arm = f"{self.side}_arm"
-        ex.move_to({arm: plan["raise"]}, C.MOVE_TO_RAISE)
-        ex.move_to({arm: plan["hover"]}, C.MOVE_TO_HOVER)
-        ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
+        if self.motion == "mink":
+            if not self.start_over_basket:
+                ex.hold(C.DROP_SETTLE_AT_START)
+            self._mink_move(plan["hover"], C.MOVE_TO_RAISE + C.MOVE_TO_HOVER, avoid_object=True)
+            # Same wrist pose, the plan's own elbow: the 7-DOF arm reaches the hover with
+            # a family of elbow positions, and the planned ready/pregrasp blends were
+            # collision-checked from this one (from mink's, the fist swept the peach).
+            ex.move_to({arm: plan["hover"]}, 0.6)
+            ex.move_to({arm: plan["ready"]}, C.MOVE_TO_READY)
+            return
+        obstacles = self._approach_obstacles()
+        if self.start_over_basket and self._direct_to_hover():
+            self._through([plan["hover"], plan["ready"]], [C.MOVE_TO_HOVER, C.MOVE_TO_READY], obstacles)
+            return
+        if self.start_over_basket:
+            self.return_home_from_here()
+        ex.hold(C.DROP_SETTLE_AT_START if self.release == "drop" else C.SETTLE_AT_START)
+        self._through([plan["raise"], plan["hover"], plan["ready"]],
+                      [C.MOVE_TO_RAISE, C.MOVE_TO_HOVER, C.MOVE_TO_READY], obstacles)
+
+    def _approach_obstacles(self) -> set[int]:
+        scene = self.scene
+        return scene.basket_geoms | {scene.object_geom} | scene.table_geoms | scene.other_object_geoms()
+
+    def _through(self, waypoints: list[np.ndarray], seconds: list[float], obstacles: set[int],
+                 hand: np.ndarray | None = None) -> None:
+        """Plan way points in one continuous motion (Executor.follow_path) if the
+        spline through them keeps the fist PATH_CLEARANCE from `obstacles` and no
+        closer to a joint limit than the way points themselves (or
+        MIN_JOINT_MARGIN_DEG); otherwise one stop per way point, as planned -- the
+        straight joint blends between them are what the planner checked. `hand`: the
+        hand's target, reached over the whole motion."""
+        from simulation.pick_place.kinematics import path_spline
+
+        ex, scene, side = self.executor, self.scene, self.side
+        arm, hand_group = f"{side}_arm", f"{side}_hand"
+        start = self.data.ctrl[scene.arm_actuators[side]].copy()
+        curve, _ = path_spline([start, *waypoints])
+        floor = min(C.MIN_JOINT_MARGIN_DEG, *(self.planner.joint_margin_degrees(q) for q in [start, *waypoints]))
+        samples = 40 * len(waypoints)  # blend_contacts' density per segment
+        blocked = None
+        for s in np.linspace(0.0, 1.0, samples + 1)[1:]:
+            q = curve(float(s))
+            if self.planner.joint_margin_degrees(q) < floor - 1e-6:
+                blocked = f"joint margin under {floor:.1f} deg"
+                break
+            hits = self.planner.hand_contacts(q, obstacles, closed=True, clearance=C.PATH_CLEARANCE)
+            if hits:
+                blocked = ", ".join(sorted(hits))
+                break
+        if blocked is None:
+            groups = {arm: list(waypoints)}
+            if hand is not None:
+                groups[hand_group] = [hand]
+            ex.follow_path(groups, float(sum(seconds)))
+            return
+        self.log.note(f"one-motion path blocked ({blocked}); stopping at each way point")
+        for index, (q, duration) in enumerate(zip(waypoints, seconds)):
+            targets = {arm: q}
+            if hand is not None and index == 0:
+                targets[hand_group] = hand
+            ex.move_to(targets, duration)
+
+    def _direct_to_hover(self) -> bool:
+        """Is the joint blend from where the arm stands (over the basket) to this plan's
+        hover clear of the basket, the table and the objects?"""
+        scene, side = self.scene, self.side
+        here = self.data.ctrl[scene.arm_actuators[side]].copy()
+        obstacles = scene.basket_geoms | {scene.object_geom} | scene.table_geoms | scene.other_object_geoms()
+        blocked = self.planner.blend_contacts(here, self.plan["hover"], obstacles)
+        if blocked:
+            self.log.note(f"direct move to the hover is blocked ({sorted(blocked)}); going home first")
+        return not blocked
+
+    def return_home_from_here(self) -> None:
+        """Back to attention from the pose a stay_over_basket episode ended in."""
+        ex, scene, side = self.executor, self.scene, self.side
+        from simulation.pick_place.kinematics import solve_pose_ik, wrist_frame
+
+        here = self.data.ctrl[scene.arm_actuators[side]].copy()
+        position, rotation = wrist_frame(self.model, side, here)
+        up = solve_pose_ik(self.model, side, position + np.array([0.0, 0.0, 0.10]), rotation, here)
+        ex.move_to({f"{side}_arm": up}, C.RETURN_SECONDS)
+        ex.move_to({f"{side}_arm": scene.attention_pose[side]}, 2.0 * C.RETURN_SECONDS)
+        ex.hold(0.3)
 
     def phase_reach(self) -> None:
         ex, plan, scene = self.executor, self.plan, self.scene
@@ -264,9 +531,21 @@ class Demo:
 
     def phase_grasp(self) -> None:
         ex, scene, side = self.executor, self.scene, self.side
+        forces = self.close_hand()
+        grasp_orientation = self.plan.grasp_orientation if self.plan.grasp_orientation is not None else self.planner.orientation
+        self._proof_lift_and_regrip(grasp_orientation, forces)
+
+    def close_hand(self) -> dict[str, float]:
+        """Close onto the object until every finger presses (raises if one cannot)."""
+        ex, scene, side = self.executor, self.scene, self.side
         fingers = ("index", "middle", "ring", "pinky")
-        ex.close_until_contact(side, fingers, force_target=1.0)
-        ex.close_until_contact(side, ("thumb",), force_target=1.0)
+        target = scene.grasp_target
+        if target is not None and target.entry.close == "together":
+            # Round objects roll away from fingers that close first: thumb with them.
+            ex.close_until_contact(side, (*fingers, "thumb"), force_target=1.0)
+        else:
+            ex.close_until_contact(side, fingers, force_target=1.0)
+            ex.close_until_contact(side, ("thumb",), force_target=1.0)
         # Remember the light-contact hand pose: the release returns to it first.
         self.light_grip_ctrl = scene.data.ctrl[scene.hand_actuators[side]].copy()
         forces = ex.close_until_contact(side, (*fingers, "thumb"))
@@ -281,9 +560,26 @@ class Demo:
             raise RuntimeError(f"not all fingers touch the object before lift; missing {missing}: {forces}")
         self.log.record("grasp_forces", scene.finger_contact_forces(side))
         self.log.note("thumb opposed by at least two fingers -> proof lift")
+        return forces
 
-        grasp_orientation = self.plan.grasp_orientation if self.plan.grasp_orientation is not None else self.planner.orientation
-        rise, tilt, hand_rise = ex.proof_lift(side, grasp_orientation)
+    def proof_lift_limits(self) -> tuple[float, float]:
+        """(max slip m, max tilt deg) the proof lift accepts for this hand. A drop
+        release only has to get the object over the box, so both hands take the right
+        hand's 10 mm / 15 deg there; the left's 6 mm / 11 deg were set for lifting a can
+        back out of the centre basket, and a firm five-finger left grip on an apple
+        measured 8 mm (fruit settles into the grip). A loosened limit, stated; a grip
+        that really fails is still caught by the re-grip and carry-clearance checks."""
+        if self.release == "drop":
+            return C.PROOF_LIFT_SLIP_LIMIT["right"], C.PROOF_LIFT_TILT_LIMIT_DEG["right"]
+        return C.PROOF_LIFT_SLIP_LIMIT[self.side], C.PROOF_LIFT_TILT_LIMIT_DEG[self.side]
+
+    def proof_lift(self, grasp_orientation: np.ndarray) -> tuple[float, float, float]:
+        """(object rise, tilt deg, hand rise) of the proof lift (Executor.proof_lift)."""
+        return self.executor.proof_lift(self.side, grasp_orientation)
+
+    def _proof_lift_and_regrip(self, grasp_orientation: np.ndarray, forces: dict[str, float]) -> None:
+        ex, scene, side = self.executor, self.scene, self.side
+        rise, tilt, hand_rise = self.proof_lift(grasp_orientation)
         slip = hand_rise - rise
         self.log.record("proof_lift_rise_m", rise)
         self.log.record("proof_lift_hand_rise_m", hand_rise)
@@ -291,7 +587,8 @@ class Demo:
         self.log.note(f"proof lift: hand {hand_rise*100:+.1f}cm, object {rise*100:+.1f}cm (slip {slip*1000:.0f}mm), tilt {tilt:.0f} degrees")
         if hand_rise < C.PROOF_LIFT_MIN_HAND_RISE:
             raise RuntimeError(f"proof lift did not happen: hand rose only {hand_rise*100:.1f}cm")
-        if slip > C.PROOF_LIFT_SLIP_LIMIT[side] or tilt > C.PROOF_LIFT_TILT_LIMIT_DEG[side]:
+        slip_limit, tilt_limit = self.proof_lift_limits()
+        if slip > slip_limit or tilt > tilt_limit:
             raise RuntimeError(
                 f"grasp failed: object did not come with the hand (hand +{hand_rise*100:.1f}cm, "
                 f"object +{rise*100:.1f}cm, slip {slip*1000:.0f}mm, tilt {tilt:.0f}deg); forces {forces}"
@@ -342,8 +639,22 @@ class Demo:
         self.log.record("carry_clearance_above_rim_m", clearance)
         self.log.note(f"object bottom is {clearance*100:+.1f}cm above the basket rim; transferring A -> B")
         path = plan.paths["transfer"]
-        ex.follow({arm: path}, [C.TRANSFER_SECONDS / len(path)] * len(path))
-        self._check_carry_clearance("transfer")
+        # Carrying stays on the planner's Cartesian transfer path, also with
+        # motion="mink": mink re-solved each segment on its own and the loaded arm
+        # jerked between them -- a left-hand apple held by thumb and pinky fell out
+        # on the way (full mink run, 2026-09-29). mink moves the empty hand only.
+        ex.follow_path({arm: path}, C.TRANSFER_SECONDS)
+        try:
+            self._check_carry_clearance("transfer")
+        except RuntimeError as error:
+            # A drop only needs the object over the box: one that sagged (or slid) low
+            # on the way is let go where it is; the box check afterwards decides.
+            if self.release != "drop":
+                raise
+            self.log.note(f"{error}; dropping anyway")
+        if self.release == "drop":
+            self._lower_to_drop_height()
+            return
         # Re-centre at carry height, before entering the basket.  The old lower path
         # was solved from a stale held offset; using it after a lateral correction
         # made the left wrist enter the rim with no valid IK escape.
@@ -466,6 +777,21 @@ class Demo:
             self.log.record("set_down_release_gap_m", gap)
             self.log.note(f"arm at full reach; releasing {gap*1000:.1f}mm above the basket floor")
 
+    def _lower_to_drop_height(self) -> None:
+        """Follow the planned lowering only while the object's bottom stays
+        DROP_ABOVE_RIM over the rim, then stop: the release lets it fall the rest."""
+        ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
+        allowed = scene.object_bottom_z() - (scene.basket_rim_z() + C.DROP_ABOVE_RIM)
+        start_z = float(scene.wrist_position(side)[2])
+        path = [q for q in plan.paths["lower"]
+                if start_z - float(self.scene.wrist_position_at(side, q)[2]) <= allowed]
+        if path:
+            ex.follow_path({f"{side}_arm": path}, C.LOWER_SECONDS * len(path) / len(plan.paths["lower"]))
+            plan.joints["lower"] = path[-1]
+        drop = scene.object_bottom_z() - scene.basket_rim_z()
+        self.log.record("drop_height_above_rim_m", drop)
+        self.log.note(f"releasing with the object's bottom {drop*100:.1f}cm above the basket rim")
+
     def _centre_over_basket(self, orientation: np.ndarray) -> None:
         """Slide the wrist so the object -- not the wrist -- hangs over the basket centre.
 
@@ -560,26 +886,55 @@ class Demo:
         self.log.record("release_retreat_displacement_m", float(np.linalg.norm(object_after_retreat - object_after_open)))
         self.log.record("release_lateral_drift_m", float(np.linalg.norm((object_after_retreat - object_before)[:2])))
         ex.open_fingers(side, ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
+        if self.stay_over_basket:
+            # Next pick starts from here: only the fist closes, over the basket.
+            ex.move_to({hand: scene.rest_hand[side]}, 0.6)
+            return
+        self.return_home()
+
+    def _mink_move(self, joints: np.ndarray, seconds: float, avoid_object: bool) -> None:
+        """Cartesian move to the wrist pose of `joints` (a plan way point), solved by mink
+        with the hand and forearm kept clear of the table, the box and the other objects
+        (and of the target object on the way to it)."""
+        from simulation.pick_place.kinematics import wrist_frame
+        from simulation.pick_place.mink_motion import MinkArm
+
+        scene = self.scene
+        avoid = set(scene.table_geoms) | set(scene.basket_geoms) | set(scene.other_object_geoms())
+        if avoid_object:
+            avoid.add(scene.object_geom)
+        position, rotation = wrist_frame(self.model, self.side, joints)
+        target = np.eye(4)
+        target[:3, :3], target[:3, 3] = rotation, position
+        MinkArm(scene, self.side, avoid=avoid).move_to_pose(self.executor, target, seconds)
+
+    def return_home(self) -> None:
+        if hasattr(self.executor.viewer, "phase"):
+            self.executor.viewer.phase = f"{self.side} home"
+        ex, plan, scene, side = self.executor, self.plan, self.scene, self.side
+        arm, hand = f"{side}_arm", f"{side}_hand"
+        # Home keeps the planned hover -> raise -> attention route, also with
+        # motion="mink": mink's straight line from over the box down to the hanging
+        # hand ran a finger 3 mm into the box wall (full mink run, 2026-09-29).
         # Continue home after clearing the basket.
-        ex.move_to({arm: plan["hover"], hand: scene.rest_hand[side]}, C.RETURN_SECONDS)
         # Back the way it came, via a raise point re-chosen now that the object stands
         # in the basket, so the hand never sweeps low over the basket or the object.
+        # (find_raise depends on the plan's hover only: chosen before moving.)
         try:
             raise_joints, _ = ex.think(self.planner.find_raise, plan["hover"], plan.centers["hover"])
         except RuntimeError:
             # No reachable raise point (left arm after a centre-basket retrieval,
             # real-height robot, 2026-09-24). Go straight home only if that blend is
             # clear of the basket, the object and the table.
-            obstacles = scene.basket_geoms | {scene.object_geom} | scene.table_geoms
+            obstacles = scene.basket_geoms | {scene.object_geom} | scene.table_geoms | scene.other_object_geoms()
             blocked = self.planner.blend_contacts(plan["hover"], scene.attention_pose[side], obstacles)
             if blocked:
                 raise
             self.log.note("no raise way point on the way back; the direct blend home is clear")
             raise_joints = None
-        if raise_joints is not None:
-            ex.move_to({arm: raise_joints}, C.RETURN_SECONDS)
-        ex.move_to({arm: scene.attention_pose[side]}, C.RETURN_SECONDS)
-        ex.hold(C.FINAL_SETTLE)  # settle to verify the object stands on its own
+        way = [plan["hover"]] + ([raise_joints] if raise_joints is not None else []) + [scene.attention_pose[side]]
+        self._through(way, [C.RETURN_SECONDS] * len(way), self._approach_obstacles(), hand=scene.rest_hand[side])
+        ex.hold(C.DROP_FINAL_SETTLE if self.release == "drop" else C.FINAL_SETTLE)  # settle to verify the object stands on its own
 
     PHASE_MESSAGES = {
         "perceive": "locating the object with the head camera",
@@ -601,13 +956,15 @@ class Demo:
         while index < len(PHASES):
             name = PHASES[index]
             self.log.phase(index + 1, len(PHASES), name, self.PHASE_MESSAGES[name])
+            if hasattr(viewer, "phase"):
+                viewer.phase = f"{self.side} {name}"
             try:
                 getattr(self, f"phase_{name}")()
             except RuntimeError as error:
                 # A grasp the physics rejects (a finger not pressing, the proof lift
                 # leaving the object behind) is retried with the next grasp heading:
                 # IK feasibility alone does not tell which heading holds the can.
-                if name != "grasp" or len(self.failed_grasp_yaws) >= C.GRASP_RETRIES:
+                if name != "grasp" or len(self.failed_grasp_yaws) >= self.grasp_retries:
                     raise
                 self.failed_grasp_yaws.append(float(self.plan.grasp_key))
                 self.log.note(f"grasp at yaw {self.plan.grasp_yaw_deg:+.0f} rejected ({error}); letting go and retrying")
@@ -627,7 +984,20 @@ class Demo:
         arm, hand = f"{side}_arm", f"{side}_hand"
         if self.light_grip_ctrl is not None:
             ex.move_to({hand: self.light_grip_ctrl}, C.RELAX_GRIP_SECONDS)
-        ex.move_to({hand: scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS), arm: plan["hover"]}, C.RETREAT_SECONDS)
+        # Open in place, then straight up, then to the hover. Opening while the wrist
+        # moved to the hover rolled a lying can off the platform after a failed proof
+        # lift (x 0.255 -> -0.03 m in 2 s, demo_002 2026-10-01): it was lost to the retry.
+        ex.move_to({hand: scene.hand_ctrl(side, open_fingers=C.ALL_FINGERS)}, C.RELEASE_SECONDS)
+        from simulation.pick_place.kinematics import solve_pose_ik, wrist_frame
+
+        here = self.data.ctrl[scene.arm_actuators[side]].copy()
+        position, rotation = wrist_frame(self.model, side, here)
+        try:
+            up = solve_pose_ik(self.model, side, position + np.array([0.0, 0.0, C.PROOF_LIFT_HEIGHT]), rotation, here)
+            ex.move_to({arm: up}, C.RETREAT_SECONDS)
+        except RuntimeError:
+            pass  # no straight-up pose: go to the hover directly, as before
+        ex.move_to({arm: plan["hover"]}, C.RETREAT_SECONDS)
         ex.open_fingers(side, ("thumb",), 0.5 * C.RELEASE_SECONDS, release_thumb_yaw=True)
         ex.move_to({hand: scene.rest_hand[side]}, 0.5 * C.RELEASE_SECONDS)
         raise_joints, _ = ex.think(self.planner.find_raise, plan["hover"], plan.centers["hover"])
@@ -635,6 +1005,7 @@ class Demo:
         ex.move_to({arm: scene.attention_pose[side]}, C.RETURN_SECONDS)
         ex.hold(C.SETTLE_AT_START)
         self.perceived_position = None  # look again: the failed grasp may have moved it
+        self.scene.grasp_target = None
 
     def restart(self) -> None:
         """Put the scene back at the start of an episode and clear the log, so `run()`
@@ -644,6 +1015,8 @@ class Demo:
         self.executor = Executor(self.scene, on_step=self.executor.on_step)
         self.executor.active_side = self.side
         self.perceived_position = None
+        self.perceived_pose = None
+        self.scene.grasp_target = None
         self.light_grip_ctrl: np.ndarray | None = None
         self.failed_grasp_yaws: list[float] = []
         self.perception_error_m = None
@@ -657,6 +1030,31 @@ class Demo:
     def _solve_poses(self) -> dict[str, dict[str, np.ndarray]]:
         self.plan = self.planner.plan(self.object_position())
         return {self.side: {**self.plan.joints, **{f"{k}_path": v for k, v in self.plan.paths.items()}}}
+
+
+def _upright_axial(key: str, pose: np.ndarray) -> np.ndarray:
+    """An axially symmetric object (the can) estimated upside down is turned the right
+    way up (180 deg about its own x axis): top and bottom differ only by the lid, which
+    FoundationPose confused on the belt (axis 180 deg from vertical, twice), and every
+    wrap grasp in the library holds the can by its middle anyway."""
+    from simulation.objects import OBJECTS
+
+    if OBJECTS[key].symmetry != "axial" or float(pose[2, 2]) > -np.cos(np.radians(45.0)):
+        return pose
+    flipped = pose.copy()
+    flipped[:3, :3] = pose[:3, :3] @ np.diag([1.0, -1.0, -1.0])
+    return flipped
+
+
+def _keep_axis(key: str, pose: np.ndarray):
+    """The object axis the pose error is scored on (grasp library 'keep' rule)."""
+    from simulation.pick_place.grasp_library import select_grasp
+
+    try:
+        keep = select_grasp(key, pose).entry.keep
+    except RuntimeError:
+        keep = None
+    return keep.axis if keep is not None else (0.0, 0.0, 1.0)
 
 
 # ---------------------------------------------------------------------- trials / layouts
@@ -704,12 +1102,20 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
     scene, values = demo.scene, demo.log.values
     final_pos = scene.object_position()
     placement_error = float(np.linalg.norm(final_pos[:2] - scene.basket_floor()[:2]))
-    inside_basket = scene.object_inside_basket()
-    tilt = upright_tilt_degrees(scene.object_quaternion())
+    # Grasp-library picks (lying can/pear) may roll against a wall after the release:
+    # judged on resting in the basket. The original can pipeline keeps its 2mm margin.
+    # A drop only has to end up in the basket (possibly on another object).
+    if demo.release == "drop":
+        inside_basket = scene.object_in_basket()  # not fallen out (stacking allowed)
+    elif scene.grasp_target is not None:
+        inside_basket = scene.object_resting_in_basket()
+    else:
+        inside_basket = scene.object_inside_basket()
+    tilt = scene.object_tilt_deg()
     if failure is None and stop_after is None:
         if not inside_basket:
             failure = f"object footprint is outside basket (placement error {placement_error*1000:.1f}mm)"
-        elif tilt > C.PROOF_LIFT_MAX_TILT_DEG:
+        elif tilt > C.PROOF_LIFT_MAX_TILT_DEG and demo.release != "drop":
             failure = f"final object tilt {tilt:.1f}deg exceeds {C.PROOF_LIFT_MAX_TILT_DEG:.0f}deg"
     return TrialResult(
         failure is None,
@@ -751,4 +1157,8 @@ def run_trial(demo: Demo, viewer=None, stop_after: str | None = None) -> TrialRe
         min_joint_margin_deg=values.get("min_joint_margin_deg"),
         max_penetration_m=demo.executor.max_penetration_m,
         model_timestep_s=float(scene.model.opt.timestep),
+        object_key=scene.pick_type,
+        grasp_name=values.get("grasp_name"),
+        pose_backend=demo.pose_backend,
+        pose_rotation_error_deg=values.get("pose_rotation_error_deg"),
     )
