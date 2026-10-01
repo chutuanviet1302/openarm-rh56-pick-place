@@ -159,3 +159,36 @@ def estimate_pose(scene, key: str | None = None, camera: str = "d435_head", work
         # The first call after WSL was idle failed once (exit 1) and ran fine straight
         # after: one retry.
         return frame.T_world_cam @ run_foundationpose(directory)
+
+
+def run_foundationpose_many(directories: list[Path], timeout_s: float = 1800.0) -> list[np.ndarray]:
+    """wsl/fp_run.py on several exported frames in one call (models load once)."""
+    script = to_wsl_path(PROJECT_ROOT / "wsl" / "fp_run_dirs.sh")
+    command = ["wsl.exe", "-d", WSL_DISTRO, "--", "bash", script, *(to_wsl_path(d) for d in directories)]
+    for directory in directories:
+        (Path(directory) / "T_cam_object.txt").unlink(missing_ok=True)
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout_s)
+    missing = [d for d in directories if not (Path(d) / "T_cam_object.txt").is_file()]
+    if completed.returncode != 0 or missing:
+        tail = "\n".join((completed.stderr or completed.stdout).strip().splitlines()[-15:])
+        raise RuntimeError(f"FoundationPose failed (exit {completed.returncode}, {len(missing)} without a pose):\n{tail}")
+    return [np.loadtxt(Path(d) / "T_cam_object.txt") for d in directories]
+
+
+def estimate_poses(scene, items: list[tuple[str, np.ndarray | None]], camera: str = "d435_head") -> list[np.ndarray]:
+    """T_world_object for several objects (name, detector mask) from one rendered frame
+    each, estimated in one FoundationPose call."""
+    frames, directories = [], []
+    for name, mask in items:
+        frame = capture(scene, name, camera)
+        if mask is not None:
+            frame.mask = np.asarray(mask, dtype=bool)
+        if frame.mask.sum() < 100:
+            raise RuntimeError(f"perception failed: {name} covers only {int(frame.mask.sum())} px in '{camera}'")
+        frames.append(frame)
+        directories.append(frame.export(PROJECT_ROOT / "artifacts" / "fp_frames" / f"batch_{name}"))
+    try:
+        results = run_foundationpose_many(directories)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        results = run_foundationpose_many(directories)  # the first call after WSL was idle can fail once
+    return [frame.T_world_cam @ result for frame, result in zip(frames, results)]

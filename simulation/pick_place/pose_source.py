@@ -33,6 +33,23 @@ def get_object_pose(scene, key: str | None = None, backend: str = "gt", camera: 
     return pose
 
 
+def get_object_poses(scene, keys: list[str], backend: str = "gt", camera: str = "d435_head",
+                     masks: list[np.ndarray | None] | None = None) -> list[np.ndarray]:
+    """Several objects at once: FoundationPose runs them in one WSL call (its models
+    load once: ~10 s saved per object)."""
+    masks = masks or [None] * len(keys)
+    if backend == "foundationpose":
+        from simulation.fp_bridge import estimate_poses
+
+        poses = estimate_poses(scene, list(zip(keys, masks)), camera)
+    else:
+        poses = [_estimate(scene, key, backend, camera, mask) for key, mask in zip(keys, masks)]
+    for key, pose in zip(keys, poses):
+        for listener in POSE_LISTENERS:
+            listener(scene, key, backend, pose, camera)
+    return poses
+
+
 def _estimate(scene, key: str, backend: str, camera: str, mask: np.ndarray | None) -> np.ndarray:
     if backend == "gt":
         return scene.object_pose(key)

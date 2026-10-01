@@ -169,7 +169,8 @@ class BinTask:
 
     def build_perception(self) -> Perception:
         return Perception(self.scene, self.detector, self.tracker, period=LOOK_PERIOD_S,
-                          phase_source=lambda: self.recorder.phase)
+                          phase_source=lambda: self.recorder.phase, backend=self.pose_backend,
+                          instance_of=self.instance_of)
 
     def build_scene(self) -> Scene:
         return build_scene(self.layout)
@@ -203,12 +204,7 @@ class BinTask:
         """A fresh detection's pixels for the object `name` (nearest detection of its
         kind), for every pose estimate of a pick -- retries included."""
         def fresh() -> np.ndarray | None:
-            kind = self.scene.object_types[name]
-            detections = [d for d in self.perception.look().detections.get("table", []) if d.label == kind]
-            if not detections:
-                raise RuntimeError(f"perception failed: {name} not seen any more")
-            here = self.scene.object_position_of(name)[:2]
-            return min(detections, key=lambda d: float(np.linalg.norm(d.centroid[:2] - here))).mask
+            return self.perception.target_view("table").mask
         return fresh
 
     def instance_of(self, detection) -> str:
@@ -222,10 +218,12 @@ class BinTask:
         from simulation.pick_place import pose_source
 
         pose_source.POSE_LISTENERS.append(self.pose_log)
+        pose_source.POSE_LISTENERS.append(self.perception.on_pose)
         try:
             return self._run()
         finally:
             pose_source.POSE_LISTENERS.remove(self.pose_log)
+            pose_source.POSE_LISTENERS.remove(self.perception.on_pose)
             self.recorder.extra = {**self.pose_log.arrays(), **self.perception.log.arrays()}
             self.perception.close()
             looks = self.perception.look_wall_seconds
@@ -239,6 +237,8 @@ class BinTask:
         scene = self.scene
         print("enrolling the objects (one reference per kind and pose) ...")
         self.enroll()
+        # 6D pose of every object on the table, in one call of the pose backend.
+        self.perception.estimate_6d("table", self.perception.look().detections.get("table", []))
         attempts: dict[str, int] = {}
         for arm in ("right", "left"):
             over: Demo | None = None  # the demo whose release left this arm over the box
@@ -337,8 +337,13 @@ class BinTask:
 
         placement = self.placement_of(name)
         everywhere = self.dropped["right"] + self.dropped["left"]  # either arm's drops are taken space
+        # Where the box still has free floor, as the camera sees it now.
+        scene = self.scene
+        bottom = scene.model.geom("place_basket_bottom").id
+        floor_z = float(scene.basket_floor()[2] + scene.model.geom_size[bottom][2])
+        fill = self.perception.tote_fill(self.box, self.box_half, floor_z)
         return drop_spot_candidates(self.box_half, arm, footprint_radius(placement), everywhere,
-                                    height=object_height(placement))[:count]
+                                    height=object_height(placement), fill=fill)[:count]
 
     # ---------------------------------------------------------------- hooks
     def wanted(self, label: str | None) -> bool:
@@ -399,7 +404,9 @@ def replay(path: Path, speed: float = 1.0, scene_builder=build_scene, quality: s
     from simulation.pick_place.replay_view import play
 
     recording = np.load(path)
-    overlays = (DetectionReplayOverlay(recording), PoseReplayOverlay(recording, POSE_SHOW_SECONDS))
+    # The 6D boxes are drawn per object by the detection overlay; the pose overlay keeps
+    # its camera image of the latest estimate (estimate red, ground truth green, error).
+    overlays = (DetectionReplayOverlay(recording), PoseReplayOverlay(recording, POSE_SHOW_SECONDS, markers=False))
     return play(path, lambda _recording: scene_builder(), speed=speed, quality=quality, show_ui=show_ui,
                 overlays=overlays, hold=hold)
 

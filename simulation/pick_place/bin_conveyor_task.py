@@ -148,7 +148,8 @@ class BinConveyorTask(BinTask):
         if not hasattr(self, "belt_detector"):  # BinTask.__init__ runs first; replaced above
             return super().build_perception()
         return Perception(self.scene, self.detector, self.tracker, self.belt_detector, self.belt_tracker,
-                          period=LOOK_PERIOD_S, phase_source=lambda: self.recorder.phase)
+                          period=LOOK_PERIOD_S, phase_source=lambda: self.recorder.phase,
+                          backend=self.pose_backend, instance_of=self.instance_of)
 
     def enroll(self) -> None:
         super().enroll()
@@ -189,6 +190,9 @@ class BinConveyorTask(BinTask):
             # at most), or a fresh one.
             detections = self.perception.look(max_age=LOOK_PERIOD_S).detections.get("belt", [])
             tracks = [t for t in self.belt_tracker.tracks.values() if t.missed == 0]
+            # 6D once a belt object's track is steady (FoundationPose once, the tracker after).
+            steady = {t.track_id for t in tracks if t.seen >= MIN_LOOKS_FOR_VELOCITY}
+            self.perception.estimate_6d("belt", [d for d in detections if d.track_id in steady])
             by_track = {d.track_id: d for d in detections if d.track_id is not None}
             job = self._assign(tracks, counts, done, tried)
             if job is None:
@@ -305,12 +309,7 @@ class BinConveyorTask(BinTask):
 
     def mask_source_belt(self, name: str):
         def fresh():
-            kind = self.scene.object_types[name]
-            detections = [d for d in self.perception.look().detections.get("belt", []) if d.label == kind]
-            if not detections:
-                raise RuntimeError(f"perception failed: {name} not seen on the belt")
-            here = self.scene.object_position_of(name)[:2]
-            return min(detections, key=lambda d: float(np.linalg.norm(d.centroid[:2] - here))).mask
+            return self.perception.target_view("belt").mask
         return fresh
 
     def _observe(self, name: str):
