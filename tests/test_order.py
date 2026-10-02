@@ -37,12 +37,12 @@ class OrderTest(unittest.TestCase):
         # An orange in the tote that the order did not ask for: a mispick.
         wrong = book.result({"can": True, "apple": True, "orange": True}, kinds)
         self.assertEqual((wrong.status, wrong.mispicks), ("failed", ["orange"]))
-        # Pear not in stock, nothing failed: short, not a robot fault.
-        book = OrderBook(Order("o", {"apple": 1, "pear": 1}))
+        # Orange not picked, nothing failed: short, not a robot fault.
+        book = OrderBook(Order("o", {"apple": 1, "orange": 1}))
         book.record("apple", "apple", True)
         short = book.result({"apple": True}, kinds)
         self.assertEqual(short.status, "short")
-        self.assertEqual([(l.sku, l.missing) for l in short.lines], [("apple", 0), ("pear", 1)])
+        self.assertEqual([(l.sku, l.missing) for l in short.lines], [("apple", 0), ("orange", 1)])
         # A pick that went wrong and left a gap: failed.
         book = OrderBook(Order("o", {"apple": 1}))
         book.record("apple", "apple", False)
