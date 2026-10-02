@@ -49,9 +49,9 @@ Kết quả 3 đơn mẫu (1 lần chạy mỗi đơn, bố cục cố định, 
 |---|---|---|---|---|---|---|---|---|---|
 | `demo_001` | apple x1, can x1 | Đủ đơn | 2/2 | 0 | 0 | 47 | 125 | 0 | 5.75 |
 | `demo_002` | can x2, orange x1 | Đủ đơn | 3/3 | 0 | 0 | 112 | 214 | 0 | 5.75 |
-| `demo_003` | peach x1, pear x1 | Thiếu hàng | 1/2 | 0 | 0 | 175 | 221 | 0 | 3.62 |
+| `demo_003` | peach x2 | Thiếu hàng | 1/2 | 0 | 0 | 175 | 293 | 0 | 3.62 |
 
-`demo_003` thiếu `pear` vì cell không có hàng đó: cell chờ trên băng tối đa 150 s rồi báo thiếu, không gắp nhầm món khác.
+`demo_003` thiếu 1 `peach` vì cell chỉ có 1 quả đào: cell chờ trên băng tối đa 150 s rồi báo thiếu, không gắp nhầm món khác.
 Va chạm đếm mọi frame có bàn tay/cánh tay xuyên vào bàn, băng, thùng, thân robot, tay kia hoặc món hàng khác (`scripts/task_metrics.py`).
 
 

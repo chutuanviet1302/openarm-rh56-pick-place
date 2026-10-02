@@ -20,13 +20,12 @@ from pathlib import Path
 
 # SKU -> object kind the detector names. The cell can identify these (detector
 # references are enrolled for them); the registry also has kinds that are not stocked
-# in the cell (e.g. "pear"): orderable, but they end short.
+# in the cell (a quantity above the stock): orderable, but they end short.
 CATALOG = {
     "can": {"kind": "can", "name": "Lon cà chua (YCB 005)"},
     "apple": {"kind": "apple", "name": "Táo (YCB 013)"},
     "orange": {"kind": "orange", "name": "Cam (YCB 017)"},
     "peach": {"kind": "peach", "name": "Đào (YCB 015)"},
-    "pear": {"kind": "pear", "name": "Lê (YCB 016)"},
 }
 ORDER_ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 MAX_QTY = 10

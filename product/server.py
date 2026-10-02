@@ -45,6 +45,35 @@ RUN_LINE = re.compile(r"^run: (.+)$", re.M)
 SAFE_RUN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def stock() -> dict[str, dict]:
+    """What the cell has in stock in the fixed layout, per SKU: on the table, on the belt.
+    (From the task's own layout constants, so it cannot drift from what the cell does.)"""
+    counts = {sku: {"table": 0, "belt": 0} for sku in CATALOG}
+    try:
+        from simulation.pick_place.bin_conveyor_task import BELT_OBJECTS, TABLE_OBJECTS
+
+        for where, objects in (("table", TABLE_OBJECTS), ("belt", BELT_OBJECTS)):
+            for p in objects:
+                for sku, entry in CATALOG.items():
+                    if entry["kind"] == p.key:
+                        counts[sku][where] += 1
+    except Exception as error:  # noqa: BLE001 - the page then shows no stock, not an error
+        print(f"(stock unavailable: {error})")
+        return {}
+    return counts
+
+
+def presets() -> list[dict]:
+    rows = []
+    for path in sorted((ROOT / "orders").glob("*.json")):
+        try:
+            order = json.loads(path.read_text(encoding="utf-8"))
+            rows.append({"order_id": order["order_id"], "items": order["items"]})
+        except (OSError, ValueError, KeyError):
+            continue
+    return rows
+
+
 def _tail(path: Path, lines: int = 30) -> list[str]:
     try:
         return path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
@@ -141,7 +170,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlparse(self.path).path
         if path == "/api/catalog":
-            self.send_json(200, CATALOG)
+            self.send_json(200, {"catalog": CATALOG, "stock": STOCK, "presets": presets()})
         elif path == "/api/runs":
             self.send_json(200, list_runs())
         elif path.startswith("/api/orders/"):
@@ -195,7 +224,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_json(202, {"job": job_id})
 
 
+STOCK: dict = {}
+
+
 def main(argv=None) -> None:
+    global STOCK
+    STOCK = stock()
     parser = argparse.ArgumentParser(description="PickCell web app")
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--no-browser", action="store_true")

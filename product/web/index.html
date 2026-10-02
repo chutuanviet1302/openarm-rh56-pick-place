@@ -4,101 +4,269 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PickCell</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: "media",
+  theme: { extend: {
+    fontFamily: { sans: ["Inter", "system-ui", "Segoe UI", "Roboto", "sans-serif"] },
+    colors: { brand: { 50:"#eef3ff",100:"#dce6ff",200:"#b9ccff",400:"#6b8dff",500:"#3d66f5",600:"#2457e6",700:"#1c45bd",900:"#142a73" } },
+    keyframes: { pulseBar: { "50%": { opacity: ".35" } }, rise: { from: { opacity: 0, transform: "translateY(6px)" }, to: { opacity: 1, transform: "none" } } },
+    animation: { pulseBar: "pulseBar 1.2s infinite", rise: "rise .25s ease-out" }
+  } }
+};
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style type="text/tailwindcss">
+  @layer components {
+    .card { @apply rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-900 dark:shadow-none; }
+    .field { @apply rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-800 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100; }
+    .badge { @apply grid h-8 w-8 place-items-center rounded-full bg-brand-600 text-sm font-bold text-white; }
+  }
+</style>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--muted:#5b6475;--line:#e3e6ec;--ok:#1a7f37;--warn:#b35900;--bad:#c62828;--accent:#2f6feb}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#171b23;--ink:#e6e9ef;--muted:#9aa3b2;--line:#2a303c;--ok:#3fb950;--warn:#e3a33b;--bad:#ff6b6b;--accent:#58a6ff}}
-*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
-main{max-width:1080px;margin:0 auto;padding:20px 16px 48px}h1{font-size:22px;margin:0}h2{font-size:16px;margin:0 0 10px}
-.sub{color:var(--muted);margin:2px 0 18px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
-.two{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
-.sku{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
-.sku small{color:var(--muted);display:block}input,select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
-input[type=number]{width:72px}.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.row label{font-size:13px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
-button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}button:disabled{opacity:.5;cursor:default}
-button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line);padding:5px 10px;font-weight:500}
-.err{color:var(--bad);min-height:1.5em}.k{color:var(--muted);font-size:13px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
-pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px;max-height:280px;overflow:auto;white-space:pre-wrap;margin:8px 0 0}
-table{width:100%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--muted);font-weight:600;font-size:13px}
-.steps{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}.steps span{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
-.steps span.on{background:var(--accent);color:#fff;border-color:var(--accent)}.scroll{overflow-x:auto}a{color:var(--accent)}
+  [hidden]{display:none!important}
+  html{scroll-behavior:smooth}
+  body{-webkit-font-smoothing:antialiased}
+  details>summary{list-style:none}details>summary::-webkit-details-marker{display:none}
+  details[open] .chev{transform:rotate(90deg)}
+  .grid-bg{background-image:radial-gradient(rgba(255,255,255,.14) 1px,transparent 1px);background-size:22px 22px}
 </style>
 </head>
-<body>
-<main>
-  <h1>PickCell: cell robot soạn đơn</h1>
-  <p class="sub">OpenArm hai tay + Inspire RH56 + camera D435 · digital twin MuJoCo · lấy hàng từ bàn và băng chuyền vào thùng đơn</p>
-  <div class="two">
-    <section class="card">
-      <h2>Đơn mới</h2>
-      <div id="skus"></div>
-      <div class="row">
-        <label>Mã đơn (tuỳ chọn)<input id="order_id" placeholder="tự sinh" maxlength="40"></label>
-        <label>Bố cục<select id="layout"><option value="">Cố định (demo)</option><option value="seed">Ngẫu nhiên theo seed</option></select></label>
-        <label id="seedbox" hidden>Seed<input id="seed" type="number" min="0" step="1" value="1"></label>
-        <label>Ước lượng pose<select id="backend"><option value="gt">gt (nhanh)</option><option value="foundationpose">FoundationPose (WSL, chậm)</option></select></label>
+<body class="min-h-screen bg-slate-50 font-sans text-slate-800 dark:bg-slate-950 dark:text-slate-100">
+
+<header class="relative overflow-hidden bg-gradient-to-br from-brand-900 via-brand-700 to-violet-600 text-white">
+  <div class="grid-bg absolute inset-0"></div>
+  <div class="relative mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-5 py-6 sm:py-8">
+    <div class="grid h-12 w-12 place-items-center rounded-2xl bg-white/15 text-2xl font-extrabold ring-1 ring-white/30 backdrop-blur" aria-hidden="true">P</div>
+    <div class="min-w-0 flex-1">
+      <h1 class="text-2xl font-extrabold tracking-tight sm:text-3xl">PickCell</h1>
+      <p class="text-sm text-white/80 sm:text-base">Cell robot hai tay soạn đơn hàng · bản mô phỏng MuJoCo</p>
+    </div>
+    <div id="cell" role="status" aria-live="polite" class="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-sm font-semibold ring-1 ring-white/25 backdrop-blur">
+      <span id="celldot" class="h-2.5 w-2.5 rounded-full bg-emerald-300"></span><span id="celltext">Cell sẵn sàng</span>
+    </div>
+  </div>
+  <div class="relative mx-auto max-w-6xl px-5 pb-6">
+    <ol class="flex flex-wrap gap-2 text-xs font-medium text-white/85 sm:text-sm">
+      <li class="rounded-full bg-white/10 px-3 py-1 ring-1 ring-white/20">1 · Đặt đơn</li>
+      <li class="rounded-full bg-white/10 px-3 py-1 ring-1 ring-white/20">2 · Robot nhận dạng và gắp</li>
+      <li class="rounded-full bg-white/10 px-3 py-1 ring-1 ring-white/20">3 · Kiểm đơn và báo KPI</li>
+    </ol>
+  </div>
+</header>
+
+<main class="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)] gap-6 px-5 py-6 pb-16">
+  <div class="grid grid-cols-[minmax(0,1fr)] items-start gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+
+    <section class="card min-w-0 p-5 sm:p-6" aria-labelledby="h-order">
+      <div class="mb-1 flex items-center gap-3"><span class="badge">1</span><h2 id="h-order" class="text-lg font-bold">Tạo đơn hàng</h2></div>
+      <p class="mb-5 text-sm text-slate-500 dark:text-slate-400">Chọn món và số lượng. Robot chỉ lấy đúng món trong đơn, từ bàn và từ băng chuyền, rồi bỏ vào thùng.</p>
+
+      <div id="presets" hidden class="mb-4 flex flex-wrap items-center gap-2">
+        <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Đơn mẫu</span>
       </div>
-      <div class="row"><button id="send">Gửi đơn</button></div>
-      <p class="err" id="err"></p>
-      <p class="k">Hàng có trong cell ở bố cục cố định: trên bàn 1 lon (nằm), 1 đào, 1 táo, 1 cam; trên băng 2 lon. Món không có hàng sẽ báo "thiếu hàng".</p>
+      <div id="skus" class="grid gap-3 sm:grid-cols-2" aria-label="Danh mục hàng"></div>
+
+      <details class="mt-5 rounded-xl border border-slate-200 p-4 dark:border-slate-800">
+        <summary class="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-300">
+          <svg class="chev h-4 w-4 transition-transform" viewBox="0 0 20 20" fill="currentColor"><path d="M7 5l6 5-6 5z"/></svg>Tuỳ chọn nâng cao
+        </summary>
+        <div class="mt-4 grid gap-4 sm:grid-cols-2">
+          <label class="grid gap-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Mã đơn
+            <input id="order_id" placeholder="Tự sinh" maxlength="40" class="field"></label>
+          <label class="grid gap-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Bố cục hàng trong cell
+            <select id="layout" class="field"><option value="">Cố định (demo)</option><option value="seed">Ngẫu nhiên theo seed</option></select></label>
+          <label id="seedbox" hidden class="grid gap-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Seed
+            <input id="seed" type="number" min="0" step="1" value="1" class="field"></label>
+          <label class="grid gap-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Ước lượng pose vật
+            <select id="backend" class="field"><option value="gt">Từ mô phỏng (nhanh)</option><option value="foundationpose">FoundationPose 6D (chậm)</option></select></label>
+        </div>
+        <p id="backendnote" class="mt-3 text-xs text-slate-500 dark:text-slate-400">Từ mô phỏng: một đơn chạy vài phút. FoundationPose chạy mô hình thật trên GPU qua WSL, mất khoảng 20 phút vì mỗi lần ước lượng tốn thời gian.</p>
+      </details>
+
+      <div id="summary" aria-live="polite" class="mt-5 grid gap-2 rounded-xl bg-slate-100 p-4 text-sm dark:bg-slate-800/60"></div>
+      <p id="err" role="alert" class="mt-2 min-h-[1.4em] text-sm text-rose-600 dark:text-rose-400"></p>
+      <div class="mt-3 flex flex-wrap items-center gap-3">
+        <button id="send" disabled class="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-bold text-white shadow-md shadow-brand-600/30 transition hover:bg-brand-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-brand-500/40 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none">
+          <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M3 10l14-7-4 14-3-6z"/></svg>Gửi đơn cho robot</button>
+        <button id="clear" type="button" class="rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-600 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300">Xoá đơn</button>
+        <span id="queuehint" class="text-sm text-slate-500"></span>
+      </div>
     </section>
-    <section class="card">
-      <h2>Đang chạy</h2>
-      <div id="job" class="k">Chưa có đơn nào trong phiên này.</div>
+
+    <section class="card min-w-0 p-5 sm:p-6 lg:sticky lg:top-4" aria-labelledby="h-job">
+      <div class="mb-1 flex items-center gap-3"><span class="badge">2</span><h2 id="h-job" class="text-lg font-bold">Theo dõi robot</h2></div>
+      <p class="mb-5 text-sm text-slate-500 dark:text-slate-400">Tiến độ đơn đang chạy. Có thể tải lại trang, tiến độ vẫn được giữ.</p>
+      <div id="job"></div>
     </section>
   </div>
-  <section class="card">
-    <h2>Các đơn đã chạy</h2>
-    <div class="scroll"><table><thead><tr><th>Đơn</th><th>Trạng thái</th><th>Món trong thùng</th><th>Mispick</th><th>Sim (s)</th><th>Không va chạm</th><th></th></tr></thead>
-    <tbody id="runs"><tr><td colspan="7" class="k">Đang tải…</td></tr></tbody></table></div>
+
+  <section class="card p-5 sm:p-6" aria-labelledby="h-runs">
+    <div class="mb-1 flex items-center gap-3"><span class="badge">3</span><h2 id="h-runs" class="text-lg font-bold">Lịch sử và báo cáo</h2></div>
+    <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">Mỗi đơn đã chạy có dashboard KPI, ảnh camera nhận dạng và replay 3D.</p>
+    <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+      <table class="w-full min-w-[680px] text-left text-sm">
+        <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
+          <tr><th class="px-4 py-3">Đơn</th><th class="px-3 py-3">Kết quả</th><th class="px-3 py-3">Món trong thùng</th><th class="px-3 py-3">Soạn sai</th><th class="px-3 py-3">Thời gian (mô phỏng)</th><th class="px-3 py-3">Va chạm</th><th class="px-3 py-3"></th></tr>
+        </thead>
+        <tbody id="runs" class="divide-y divide-slate-200 dark:divide-slate-800"><tr><td colspan="7" class="px-4 py-6 text-slate-500">Đang tải…</td></tr></tbody>
+      </table>
+    </div>
   </section>
 </main>
-<script>
-const STATUS={complete:["Đủ đơn","ok"],short:["Thiếu hàng","warn"],failed:["Lỗi soạn","bad"]};
-const PHASES=["perceive","plan","ready","reach","grasp","carry","release"];
-const $=id=>document.getElementById(id);
-let current=null,timer=null;
-function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+<div id="toast" hidden class="fixed bottom-5 left-1/2 z-30 -translate-x-1/2 animate-rise rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-xl dark:bg-slate-100 dark:text-slate-900"></div>
 
-async function loadCatalog(){
-  const cat=await (await fetch("/api/catalog")).json();
-  $("skus").innerHTML=Object.entries(cat).map(([sku,v])=>
-    `<div class="sku"><div><b>${esc(sku)}</b><small>${esc(v.name)}</small></div><input type="number" min="0" max="10" step="1" value="0" data-sku="${esc(sku)}" aria-label="Số lượng ${esc(sku)}"></div>`).join("");
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const STATUS = {complete:["Đủ đơn","ok"], short:["Thiếu hàng","warn"], failed:["Lỗi soạn","bad"]};
+const PHASES = [["perceive","Nhận dạng"],["plan","Lập kế hoạch"],["ready","Chuẩn bị"],["reach","Tiếp cận"],["grasp","Nắm"],["carry","Mang"],["release","Thả"]];
+const ICONS = {can:"🥫", apple:"🍎", orange:"🍊", peach:"🍑"};
+const KEY = "pickcell.job";
+let catalog = {}, stock = {}, qty = {}, current = localStorage.getItem(KEY), timer = null;
+
+const TONE = {
+  ok:   "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+  warn: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
+  bad:  "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300",
+  "":   "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+};
+const chip = (text, tone="") => `<span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${TONE[tone]}">${text}</span>`;
+const BTN = "inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 dark:border-slate-700 dark:text-slate-200";
+const BTN_PRIMARY = "inline-flex items-center justify-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50";
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(()=>t.hidden=true,3500); }
+const stockOf = sku => stock[sku] ? stock[sku].table + stock[sku].belt : null;
+const label = sku => catalog[sku].name.split(" (")[0];
+
+function renderSkus(){
+  $("skus").innerHTML = Object.entries(catalog).map(([sku,v]) => {
+    const s = stock[sku], n = qty[sku]||0, have = stockOf(sku);
+    const chips = s ? (have===0 ? chip("Không có trong cell","bad")
+      : `${s.table?chip("Bàn "+s.table):""}${s.belt?chip("Băng "+s.belt):""}`) : "";
+    const ring = n ? "border-brand-500 ring-4 ring-brand-500/15 bg-brand-50/60 dark:bg-brand-500/10" : "border-slate-200 hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700";
+    return `<div class="rounded-xl border p-4 transition ${ring}">
+      <div class="flex items-start gap-3">
+        <div class="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100 text-2xl dark:bg-slate-800" aria-hidden="true">${ICONS[sku]||"📦"}</div>
+        <div class="min-w-0"><b class="block truncate">${esc(label(sku))}</b><small class="text-slate-500 dark:text-slate-400">${esc(sku)} · ${esc((v.name.match(/\(([^)]+)\)/)||[])[1]||"")}</small></div>
+      </div>
+      <div class="mt-3 flex min-h-[1.5rem] flex-wrap gap-1.5">${chips}</div>
+      <div class="mt-3 inline-flex items-center overflow-hidden rounded-lg border border-slate-300 dark:border-slate-700">
+        <button type="button" data-sku="${esc(sku)}" data-d="-1" aria-label="Giảm ${esc(sku)}" ${n?"":"disabled"} class="h-9 w-10 text-lg text-slate-600 transition hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800">−</button>
+        <output aria-live="polite" class="grid h-9 min-w-[2.5rem] place-items-center border-x border-slate-300 text-base font-bold dark:border-slate-700">${n}</output>
+        <button type="button" data-sku="${esc(sku)}" data-d="1" aria-label="Tăng ${esc(sku)}" ${n>=10?"disabled":""} class="h-9 w-10 text-lg text-slate-600 transition hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800">+</button>
+      </div></div>`;
+  }).join("");
+  renderSummary();
 }
+function renderSummary(){
+  const lines = Object.entries(qty).filter(([,n])=>n>0);
+  const warns = lines.filter(([sku,n]) => stockOf(sku)!==null && n>stockOf(sku));
+  $("summary").innerHTML = lines.length
+    ? `<div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Tóm tắt đơn</div>`
+      + lines.map(([sku,n])=>`<div class="flex items-center justify-between gap-3"><span>${ICONS[sku]||""} ${esc(label(sku))}</span><b class="tabular-nums">× ${n}</b></div>`).join("")
+      + (warns.length ? `<div class="rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">${warns.map(([sku,n])=>`${esc(sku)}: cell chỉ có ${stockOf(sku)}, ${n-stockOf(sku)} sẽ báo thiếu hàng`).join("<br>")}. Đơn vẫn chạy được, kết quả sẽ là "Thiếu hàng".</div>` : "")
+    : '<div class="text-slate-500 dark:text-slate-400">Chưa chọn món nào. Bấm + trên một món hoặc dùng đơn mẫu.</div>';
+  $("send").disabled = !lines.length;
+}
+$("skus").addEventListener("click", e => {
+  const b = e.target.closest("button[data-sku]"); if(!b) return;
+  const sku = b.dataset.sku; qty[sku] = Math.max(0, Math.min(10, (qty[sku]||0) + Number(b.dataset.d))); renderSkus();
+});
+$("clear").onclick = () => { qty = {}; $("err").textContent=""; renderSkus(); };
+$("layout").onchange = () => { $("seedbox").hidden = $("layout").value !== "seed"; };
+
+const EMPTY_JOB = `<div class="grid place-items-center rounded-xl border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400"><div class="mb-2 text-3xl" aria-hidden="true">🤖</div><b class="text-slate-800 dark:text-slate-100">Chưa có đơn nào đang chạy</b>Gửi một đơn ở bên trái để bắt đầu.</div>`;
+
+async function init(){
+  $("job").innerHTML = EMPTY_JOB;
+  const data = await (await fetch("/api/catalog")).json();
+  catalog = data.catalog; stock = data.stock || {};
+  if (data.presets && data.presets.length){
+    $("presets").hidden = false;
+    $("presets").insertAdjacentHTML("beforeend", data.presets.map((p,i)=>`<button type="button" data-preset="${i}" class="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-brand-500 hover:bg-brand-50 hover:text-brand-700 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-brand-500/10">${esc(p.order_id)}: ${Object.entries(p.items).map(([k,v])=>esc(k)+" ×"+v).join(", ")}</button>`).join(""));
+    $("presets").addEventListener("click", e => { const b=e.target.closest("[data-preset]"); if(!b) return;
+      const p = data.presets[Number(b.dataset.preset)]; qty = {...p.items}; $("order_id").value = ""; renderSkus(); });
+  }
+  renderSkus(); loadRuns(); if (current) poll();
+}
+
+$("send").onclick = async () => {
+  $("err").textContent = "";
+  const items = Object.fromEntries(Object.entries(qty).filter(([,n])=>n>0));
+  const body = {items, order_id: $("order_id").value.trim() || undefined, pose_backend: $("backend").value,
+                seed: $("layout").value === "seed" ? $("seed").value : undefined};
+  $("send").disabled = true;
+  try {
+    const r = await fetch("/api/orders", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    const j = await r.json(); if(!r.ok) throw new Error(j.error);
+    current = j.job; localStorage.setItem(KEY, current); toast("Đã gửi đơn cho robot"); poll();
+    $("h-job").scrollIntoView({block:"start"});
+  } catch(e){ $("err").textContent = e.message; }
+  finally { renderSummary(); }
+};
+
+function setCell(state, text){
+  $("celltext").textContent = text;
+  $("celldot").className = "h-2.5 w-2.5 rounded-full " + (state==="run" ? "bg-amber-300 animate-pulseBar" : "bg-emerald-300");
+}
+
+async function poll(){
+  clearTimeout(timer); if(!current) return;
+  let j; try { const r = await fetch(`/api/orders/${current}`); if(!r.ok) throw 0; j = await r.json(); }
+  catch { localStorage.removeItem(KEY); current=null; setCell("idle","Cell sẵn sàng"); $("job").innerHTML = EMPTY_JOB; return; }
+  const items = Object.entries(j.order||{}).map(([k,v])=>`${ICONS[k]||""} ${esc(k)} ×${v}`).join("  ·  ");
+  const head = `<div class="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1"><span class="text-xl font-extrabold">${esc(j.order_id)}</span><span class="text-sm text-slate-500 dark:text-slate-400">${items}</span></div>`;
+  let body = "";
+  if (j.status === "queued"){
+    setCell("run", `Hàng đợi: ${j.queue_position}`);
+    body = `<div class="rounded-xl bg-slate-100 p-4 text-sm dark:bg-slate-800/60">Đang chờ tới lượt. Cell chạy một đơn một lần. Vị trí trong hàng: <b>${j.queue_position}</b>.</div>`;
+  } else if (j.status === "running"){
+    setCell("run", "Robot đang soạn đơn");
+    const idx = Math.max(0, PHASES.findIndex(p=>p[0]===j.phase));
+    const steps = PHASES.map((p,i)=>{
+      const st = j.phase ? (i<idx?"done":i===idx?"cur":"todo") : "todo";
+      const dot = st==="done" ? "bg-emerald-500 text-white" : st==="cur" ? "bg-brand-600 text-white animate-pulseBar ring-4 ring-brand-500/20" : "bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400";
+      const txt = st==="cur" ? "font-bold text-brand-600 dark:text-brand-400" : st==="done" ? "text-slate-700 dark:text-slate-200" : "text-slate-400";
+      return `<li class="flex items-center gap-3"><span class="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${dot}">${st==="done"?"✓":i+1}</span><span class="text-sm ${txt}">${p[1]}</span></li>`;
+    }).join("");
+    body = `<ol class="grid gap-2.5" aria-label="Các bước của lượt gắp hiện tại">${steps}</ol>
+      <p class="mt-4 rounded-xl bg-slate-100 p-3 text-sm text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">${j.phase ? "Lượt gắp hiện tại: bước <b>"+esc(PHASES[idx][1])+"</b>. " : "Đang khởi tạo cảnh và nhận dạng. "}Đã chạy <b class="tabular-nums">${j.elapsed_s ?? 0} s</b>.</p>`;
+  } else if (j.status === "done"){
+    setCell("idle","Cell sẵn sàng");
+    const [t,c] = STATUS[j.order_status] || [j.order_status,"warn"];
+    const msg = {ok:"Đơn đã đủ món, không soạn sai.", warn:"Đơn thiếu hàng: cell không có đủ món được yêu cầu.", bad:"Đơn có lỗi soạn, xem dashboard để biết chi tiết."}[c];
+    const box = {ok:"bg-emerald-50 ring-emerald-200 dark:bg-emerald-500/10 dark:ring-emerald-500/30", warn:"bg-amber-50 ring-amber-200 dark:bg-amber-500/10 dark:ring-amber-500/30", bad:"bg-rose-50 ring-rose-200 dark:bg-rose-500/10 dark:ring-rose-500/30"}[c];
+    body = `<div class="rounded-xl p-4 ring-1 ${box} grid gap-3 animate-rise"><div class="flex flex-wrap items-center gap-3"><span class="text-xl font-extrabold">${t}</span><span class="text-sm">${msg}</span></div>
+      <div class="flex flex-wrap gap-2"><a class="${BTN_PRIMARY}" href="${j.dashboard}" target="_blank" rel="noopener">Mở dashboard KPI</a>
+      <button class="${BTN} !py-2 !text-sm" type="button" onclick="replay('${esc(j.run)}')">Replay 3D</button></div><span class="text-xs text-slate-500">Chạy mất ${j.elapsed_s} s.</span></div>`;
+  } else {
+    setCell("idle","Cell sẵn sàng");
+    body = `<div class="rounded-xl bg-rose-50 p-4 text-sm text-rose-700 ring-1 ring-rose-200 dark:bg-rose-500/10 dark:text-rose-300 dark:ring-rose-500/30"><b>Đơn bị lỗi</b><br>${esc(j.error||"không rõ nguyên nhân")}. Xem nhật ký bên dưới.</div>`;
+  }
+  $("job").innerHTML = head + body + `<details class="mt-4"><summary class="cursor-pointer text-sm font-semibold text-slate-500 hover:text-brand-600">Nhật ký chi tiết</summary><pre class="mt-2 max-h-60 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-900 p-3 text-xs leading-relaxed text-slate-200">${esc((j.log||[]).join("\n"))}</pre></details>`;
+  if (j.status === "done" || j.status === "error"){ localStorage.removeItem(KEY); current = null; loadRuns(); return; }
+  timer = setTimeout(poll, 2000);
+}
+
 async function loadRuns(){
-  const runs=await (await fetch("/api/runs")).json();
-  $("runs").innerHTML=runs.length?runs.map(r=>{const [t,c]=STATUS[r.status]||[r.status,""];
-    return `<tr><td><a href="${r.dashboard}" target="_blank">${esc(r.order_id)}</a><div class="k">${esc(r.run)}</div></td><td class="${c}">${t}</td><td>${esc(r.items_in_tote)}</td><td>${r.mispicks}</td><td>${Math.round(r.sim_seconds)}</td><td>${r.collision_free?"Đạt":"Không"}</td>
-    <td><button class="ghost" onclick="replay('${esc(r.run)}')">Replay 3D</button></td></tr>`}).join(""):`<tr><td colspan="7" class="k">Chưa có lần chạy.</td></tr>`;
+  const runs = await (await fetch("/api/runs")).json();
+  $("runs").innerHTML = runs.length ? runs.map(r => {
+    const [t,c] = STATUS[r.status] || [r.status,""];
+    return `<tr class="transition hover:bg-slate-50 dark:hover:bg-slate-800/40"><td class="px-4 py-3"><b>${esc(r.order_id)}</b><div class="text-xs text-slate-400">${esc(r.run)}</div></td><td class="px-3 py-3">${chip(t,c)}</td>
+      <td class="px-3 py-3 tabular-nums">${esc(r.items_in_tote)}</td><td class="px-3 py-3 tabular-nums">${r.mispicks}</td><td class="px-3 py-3 tabular-nums">${Math.round(r.sim_seconds)} s</td>
+      <td class="px-3 py-3">${r.collision_free ? chip("Không","ok") : chip("Có","bad")}</td>
+      <td class="px-3 py-3"><div class="flex gap-2"><a class="${BTN}" href="${r.dashboard}" target="_blank" rel="noopener">Dashboard</a>
+      <button class="${BTN}" type="button" onclick="replay('${esc(r.run)}')">Replay 3D</button></div></td></tr>`;
+  }).join("") : `<tr><td colspan="7" class="px-4 py-10 text-center text-sm text-slate-500"><b class="block text-slate-800 dark:text-slate-100">Chưa có đơn nào</b>Các đơn đã chạy sẽ hiện ở đây.</td></tr>`;
 }
 async function replay(run){
-  const r=await fetch(`/api/runs/${encodeURIComponent(run)}/replay`,{method:"POST"});const j=await r.json();
-  alert(j.message||j.error);
+  const r = await fetch(`/api/runs/${encodeURIComponent(run)}/replay`, {method:"POST"}); const j = await r.json();
+  toast(j.message || j.error);
 }
-$("layout").onchange=()=>{$("seedbox").hidden=$("layout").value!=="seed"};
-$("send").onclick=async()=>{
-  $("err").textContent="";
-  const items={};document.querySelectorAll("[data-sku]").forEach(i=>{const q=parseInt(i.value||"0",10);if(q>0)items[i.dataset.sku]=q});
-  if(!Object.keys(items).length){$("err").textContent="Chọn ít nhất một món.";return}
-  const body={items,order_id:$("order_id").value.trim()||undefined,pose_backend:$("backend").value,seed:$("layout").value==="seed"?$("seed").value:undefined};
-  $("send").disabled=true;
-  try{const r=await fetch("/api/orders",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    const j=await r.json();if(!r.ok)throw new Error(j.error);current=j.job;poll();}
-  catch(e){$("err").textContent=e.message}finally{$("send").disabled=false}
-};
-async function poll(){
-  clearTimeout(timer);if(!current)return;
-  const j=await (await fetch(`/api/orders/${current}`)).json();
-  const steps=PHASES.map(p=>`<span class="${j.phase===p?"on":""}">${p}</span>`).join("");
-  let head=`<b>${esc(j.order_id)}</b> · ${Object.entries(j.order||{}).map(([k,v])=>esc(k)+" x"+v).join(", ")}<br>`;
-  if(j.status==="queued")head+=`<span class="k">Đang chờ, vị trí ${j.queue_position} trong hàng</span>`;
-  else if(j.status==="running")head+=`<span class="k">Đang chạy · ${j.elapsed_s??0} s</span><div class="steps">${steps}</div>`;
-  else if(j.status==="done"){const [t,c]=STATUS[j.order_status]||[j.order_status,""];head+=`<span class="${c}"><b>${t}</b></span> · ${j.elapsed_s} s · <a href="${j.dashboard}" target="_blank">Mở dashboard</a>`}
-  else head+=`<span class="bad">${esc(j.error||"lỗi")}</span>`;
-  $("job").innerHTML=head+`<pre>${esc((j.log||[]).join("\n"))}</pre>`;
-  if(j.status==="done"||j.status==="error"){loadRuns();return}
-  timer=setTimeout(poll,2000);
-}
-loadCatalog();loadRuns();
+init();
 </script>
 </body>
 </html>
